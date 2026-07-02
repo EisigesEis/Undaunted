@@ -1,6 +1,10 @@
 import crypto from "crypto";
 import { logger } from "../logger";
 
+// TODO: Complete buffer should only be used with small user size
+// Later on consider bucketing auth keys by hashed tokens in db
+// loading only buckets into memory and caching more db objects
+// (not only auth) of heartbeating users
 const HashBytes = 32;
 const DummyHash = Buffer.alloc(HashBytes);
 
