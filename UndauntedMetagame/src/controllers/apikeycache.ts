@@ -134,6 +134,7 @@ export function CreateAPIKeyCache<T>(
             const StoredHash = KeyHashes.get(IncomingHash.toString("hex"));
             const CmpHash = StoredHash?.keyHashBuffer ?? DummyHash;
 
+            // TODO: Can consider removing timing safe compare. Is that unsafe against timing attack?
             const IsMatch = crypto.timingSafeEqual(IncomingHash, CmpHash);
 
             return StoredHash !== undefined && IsMatch ? StoredHash.value : undefined;
