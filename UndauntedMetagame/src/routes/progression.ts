@@ -1,11 +1,23 @@
 import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
-import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
+import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, ProgressionError, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
 
 // TODO: We will be gaining progression support very soon, but for now just a stub
 
 export const progressionRouter = Router();
+
+function StatusForProgressionError(Error: ProgressionError){
+    switch(Error){
+        case "forbidden":
+            return 403;
+        case "conflict":
+            return 409;
+        case "invalid_data":
+        case "db_error":
+            return 500;
+    }
+}
 
 progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndauntedMetagameAuth, async (req: any, res) => {
     const RequestorAccountId = req.AuthData.userId;
@@ -14,10 +26,10 @@ progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndau
 
     logger.info(`Querying encountered content for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, [ContentType]);
+    const ContentResult = await QueryEncounteredContent(RequestorAccountId, CharacterId, [ContentType]);
 
-    if(Content == undefined){
-        res.status(403);
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
         res.send();
         return;
     }
@@ -27,7 +39,7 @@ progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndau
         code: null,
         message: "OK",
         payload: {
-            content_types: Content,
+            content_types: ContentResult.data,
             success: true
         }
     });
@@ -40,10 +52,10 @@ progressionRouter.post("/encountered-content/query/:characterId", HasUndauntedMe
 
     logger.info(`Querying encountered content for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, ContentTypes);
+    const ContentResult = await QueryEncounteredContent(RequestorAccountId, CharacterId, ContentTypes);
 
-    if(Content == undefined){
-        res.status(403);
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
         res.send();
         return;
     }
@@ -53,7 +65,7 @@ progressionRouter.post("/encountered-content/query/:characterId", HasUndauntedMe
         code: null,
         message: "OK",
         payload: {
-            content_types: Content,
+            content_types: ContentResult.data,
             success: true
         }
     });
@@ -67,8 +79,10 @@ progressionRouter.post("/encountered-content/:characterId", HasUndauntedMetagame
 
     logger.info(`Adding encountered content ${ContentId} for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    if(!await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId)){
-        res.status(403);
+    const ContentResult = await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId);
+
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
         res.send();
         return;
     }
@@ -100,10 +114,10 @@ progressionRouter.get("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, asy
 
     logger.info(`Requested breadcrumbs for characterId ${RequestedCharacterId}`);
 
-    const Payload = await GetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId);
+    const BreadcrumbsResult = await GetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId);
 
-    if(Payload == undefined){
-        res.status(403);
+    if(!BreadcrumbsResult.success){
+        res.status(StatusForProgressionError(BreadcrumbsResult.error));
         res.send();
         return;
     }
@@ -112,7 +126,7 @@ progressionRouter.get("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, asy
     res.json({
         code: null,
         message: "OK",
-        payload: Payload
+        payload: BreadcrumbsResult.data
     });
 });
 
@@ -124,10 +138,10 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
 
     logger.info(`Setting breadcrumbs for characterId ${RequestedCharacterId}`);
 
-    const Payload = await SetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId, BreadcrumbsFromUser, UpdateVersion);
+    const BreadcrumbsResult = await SetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId, BreadcrumbsFromUser, UpdateVersion);
 
-    if(Payload == undefined){
-        res.status(403);
+    if(!BreadcrumbsResult.success){
+        res.status(StatusForProgressionError(BreadcrumbsResult.error));
         res.send();
         return;
     }
@@ -136,7 +150,7 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
     res.json({
         code: null,
         message: "OK",
-        payload: Payload
+        payload: BreadcrumbsResult.data
     });
 });
 
