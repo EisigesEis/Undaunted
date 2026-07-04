@@ -3,8 +3,15 @@ import { GetDb } from "../db";
 import { characters, inventory } from "../db/schema";
 import { logger } from "../logger";
 
-export type InventoryError = "forbidden" | "not_found" | "invalid_inventory_data" | "db_error";
+export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
+
+class InventoryConflictError extends Error {
+    constructor(message: string){
+        super(message);
+        this.name = "InventoryConflictError";
+    }
+}
 
 function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInsert {
     return {
@@ -12,6 +19,20 @@ function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInse
         instancedItems: "[]",
         stackedItems: "[]",
     };
+}
+
+function FindInstancedItemIndex(InstancedItems: any[], InstanceId: string){
+    return InstancedItems.findIndex((Item) => Item.instanceId === InstanceId);
+}
+
+function AssertSuperiorInstancedItemVersion(CurrentItem: any, IncomingItem: any, Operation: string){
+    if(typeof CurrentItem.updateVersion !== "number"){
+        return;
+    }
+
+    if(typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion){
+        throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
+    }
 }
 
 async function DoesCharacterBelongToUserId(UserId: string, CharacterId: string){
@@ -45,6 +66,8 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
 
             for(const Item of InstancedItems){
                 if(Item.catalogId === CatalogId && Item.instanceId == InstanceId){
+                    AssertSuperiorInstancedItemVersion(Item, {catalogId: CatalogId, instanceId: InstanceId, updateVersion: UpdateVersion}, "update");
+
                     Item.itemData = ItemData;
                     Item.updateVersion = UpdateVersion;
 
@@ -62,6 +85,11 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
         });
     }
     catch(error){
+        if(error instanceof InventoryConflictError){
+            logger.warn(error.message);
+            return {success: false, error: "conflict"};
+        }
+
         if(error instanceof SyntaxError){
             logger.error(error, `Invalid inventory data while updating instanced item ${CatalogId} for characterId ${CharacterId} and userId ${UserId}`);
             return {success: false, error: "invalid_inventory_data"};
@@ -109,17 +137,19 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                 const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
 
                 for(const ItemToRemove of InstancedItemsToRemove){
-                    const ItemIndex = InstancedItems.findIndex((Item) => Item.instanceId === ItemToRemove.instanceId);
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
 
                     if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToRemove, "remove");
                         InstancedItems.splice(ItemIndex, 1);
                     }
                 }
 
                 for(const ItemToSave of InstancedItemsToSave){
-                    const ItemIndex = InstancedItems.findIndex((Item) => Item.instanceId === ItemToSave.instanceId);
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
 
                     if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToSave, "save");
                         InstancedItems[ItemIndex] = ItemToSave;
                     }
                     else{
@@ -128,7 +158,15 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                 }
 
                 for(const ItemToAdd of InstancedItemsToAdd){
-                    InstancedItems.push(ItemToAdd);
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
+
+                    if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToAdd, "add");
+                        InstancedItems[ItemIndex] = ItemToAdd;
+                    }
+                    else{
+                        InstancedItems.push(ItemToAdd);
+                    }
                 }
 
                 Update.instancedItems = JSON.stringify(InstancedItems);
@@ -169,6 +207,11 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         });
     }
     catch(error){
+        if(error instanceof InventoryConflictError){
+            logger.warn(error.message);
+            return {success: false, error: "conflict"};
+        }
+
         if(error instanceof SyntaxError){
             logger.error(error, `Invalid inventory data while running transaction ${TransactionId} for characterId ${CharacterId} and userId ${UserId}`);
             return {success: false, error: "invalid_inventory_data"};

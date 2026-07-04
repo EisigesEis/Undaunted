@@ -11,6 +11,8 @@ function StatusForInventoryError(Error: InventoryError){
             return 403;
         case "not_found":
             return 404;
+        case "conflict":
+            return 409;
         case "invalid_inventory_data":
         case "db_error":
             return 500;
@@ -83,7 +85,7 @@ inventoryRouter.post("/inventory", HasUndauntedMetagameAuth, async (req: any, re
 
 inventoryRouter.post("/inventory/instanceditem", HasUndauntedMetagameAuth, async (req: any, res) => {
     const CharacterId = req.body.characterId;
-    const UserId = req.AuthData.IsGameserver ? req.body.accountId : req.AuthData.UserId;
+    const UserId = req.AuthData.IsGameserver ? req.body.accountId : req.AuthData.userId;
     const InstanceId = req.body.instanceId;
     const CatalogId = req.body.catalogId;
     const ItemData = req.body.itemData;
