@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { GetDb } from "../db";
-import { characters, inventory } from "../db/schema";
+import { inventory } from "../db/schema";
 import { logger } from "../logger";
+import { DoesCharacterBelongToUserId } from "./character";
 
 export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
@@ -33,15 +34,6 @@ function AssertSuperiorInstancedItemVersion(CurrentItem: any, IncomingItem: any,
     if(typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion){
         throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
     }
-}
-
-async function DoesCharacterBelongToUserId(UserId: string, CharacterId: string){
-    const Character = await GetDb().query.characters.findFirst({
-        columns: { characterId: true },
-        where: and(eq(characters.characterId, CharacterId), eq(characters.userId, UserId))
-    });
-
-    return Character != undefined;
 }
 
 export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string, UpdateVersion: number): Promise<InventoryResult<any>>{

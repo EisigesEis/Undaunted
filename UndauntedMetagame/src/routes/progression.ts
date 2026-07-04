@@ -16,6 +16,12 @@ progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndau
 
     const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, [ContentType]);
 
+    if(Content == undefined){
+        res.status(403);
+        res.send();
+        return;
+    }
+
     res.status(200);
     res.send({
         code: null,
@@ -36,6 +42,12 @@ progressionRouter.post("/encountered-content/query/:characterId", HasUndauntedMe
 
     const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, ContentTypes);
 
+    if(Content == undefined){
+        res.status(403);
+        res.send();
+        return;
+    }
+
     res.status(200);
     res.send({
         code: null,
@@ -55,7 +67,11 @@ progressionRouter.post("/encountered-content/:characterId", HasUndauntedMetagame
 
     logger.info(`Adding encountered content ${ContentId} for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId);
+    if(!await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId)){
+        res.status(403);
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.send({
@@ -84,7 +100,13 @@ progressionRouter.get("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, asy
 
     logger.info(`Requested breadcrumbs for characterId ${RequestedCharacterId}`);
 
-    const Payload = await GetBreadcrumbsForCharacterIdAndUserId(RequestedCharacterId, RequestorUserId);
+    const Payload = await GetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId);
+
+    if(Payload == undefined){
+        res.status(403);
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.json({
@@ -103,6 +125,12 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
     logger.info(`Setting breadcrumbs for characterId ${RequestedCharacterId}`);
 
     const Payload = await SetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId, BreadcrumbsFromUser, UpdateVersion);
+
+    if(Payload == undefined){
+        res.status(403);
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.json({

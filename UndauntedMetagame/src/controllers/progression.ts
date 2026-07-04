@@ -2,8 +2,14 @@ import { and, eq } from "drizzle-orm";
 import { GetDb } from "../db";
 import { breadcrumbs, encounteredcontent } from "../db/schema";
 import { logger } from "../logger";
+import { DoesCharacterBelongToUserId } from "./character";
 
 export async function QueryEncounteredContent(userId: string, characterId: string, categoriesToQuery: number[]){
+    if(!await DoesCharacterBelongToUserId(userId, characterId)){
+        logger.error(`Specified characterId ${characterId} does not belong to user ${userId}`);
+        return undefined;
+    }
+
     logger.info(`Querying ${categoriesToQuery.length} categories for userId ${userId} and characterId ${characterId}`);
 
     const EncounteredContentFromDB = await GetDb().query.encounteredcontent.findFirst({
@@ -24,6 +30,11 @@ export async function QueryEncounteredContent(userId: string, characterId: strin
 }
 
 export async function AddEncounteredContent(userId: string, characterId: string, contentType: number, contentId: string){
+    if(!await DoesCharacterBelongToUserId(userId, characterId)){
+        logger.error(`Specified characterId ${characterId} does not belong to user ${userId}`);
+        return false;
+    }
+
     const EncounteredContentFromDB = await GetDb().query.encounteredcontent.findFirst({where: and(eq(encounteredcontent.userId, userId), eq(encounteredcontent.characterId, characterId))});
 
     if(EncounteredContentFromDB == undefined){
@@ -40,15 +51,20 @@ export async function AddEncounteredContent(userId: string, characterId: string,
     await GetDb().update(encounteredcontent).set({
         encounteredcontent: JSON.stringify(ParsedEncounteredContent),
     }).where(and(eq(encounteredcontent.userId, userId), eq(encounteredcontent.characterId, characterId)));
+
+    return true;
 }
 
 export async function GetBreadcrumbsForCharacterIdAndUserId(userId: string, characterId: string){
+    if(!await DoesCharacterBelongToUserId(userId, characterId)){
+        logger.error(`Specified characterId ${characterId} does not belong to user ${userId}`);
+        return undefined;
+    }
+
     const BreadcrumbsFromDB = await GetDb().query.breadcrumbs.findFirst({where: and(eq(breadcrumbs.userId, userId), eq(breadcrumbs.characterId, characterId))});
 
     if(BreadcrumbsFromDB == undefined){
         logger.info(`Creating new breadcrumbs entry for character ${characterId}`);
-
-        // TODO: Validate userId/characterId match
 
         await GetDb().insert(breadcrumbs).values({
             breadcrumbs: "[]",
@@ -70,12 +86,15 @@ export async function GetBreadcrumbsForCharacterIdAndUserId(userId: string, char
 }
 
 export async function SetBreadcrumbsForCharacterIdAndUserId(userId: string, characterId: string, breadcrumbsFromUser: any, updateVersion: number){
+    if(!await DoesCharacterBelongToUserId(userId, characterId)){
+        logger.error(`Specified characterId ${characterId} does not belong to user ${userId}`);
+        return undefined;
+    }
+
     const BreadcrumbsFromDB = await GetDb().query.breadcrumbs.findFirst({where: and(eq(breadcrumbs.userId, userId), eq(breadcrumbs.characterId, characterId))});
 
     if(BreadcrumbsFromDB == undefined){
         logger.info(`Creating new breadcrumbs entry for character ${characterId}`);
-
-        // TODO: Validate userId/characterId match
 
         await GetDb().insert(breadcrumbs).values({
             breadcrumbs: JSON.stringify(breadcrumbsFromUser),

@@ -18,6 +18,15 @@ function TransformDbCharacterToWireCharacter(DbCharacter: any){
     };
 }
 
+export async function DoesCharacterBelongToUserId(UserId: string, CharacterId: string){
+    const Character = await GetDb().query.characters.findFirst({
+        columns: { characterId: true },
+        where: and(eq(characters.characterId, CharacterId), eq(characters.userId, UserId))
+    });
+
+    return Character != undefined;
+}
+
 export async function GetCharactersForUid(userId: string){
     let CharactersFromDb = await GetDb().query.characters.findMany({where: eq(characters.userId, userId)});
 
