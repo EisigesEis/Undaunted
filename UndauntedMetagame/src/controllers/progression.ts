@@ -6,42 +6,21 @@ import { logger } from "../logger";
 export async function QueryEncounteredContent(userId: string, characterId: string, categoriesToQuery: number[]){
     logger.info(`Querying ${categoriesToQuery.length} categories for userId ${userId} and characterId ${characterId}`);
 
-    const EncounteredContentFromDB = await GetDb().query.encounteredcontent.findFirst({where: and(eq(encounteredcontent.userId, userId), eq(encounteredcontent.characterId, characterId))});
+    const EncounteredContentFromDB = await GetDb().query.encounteredcontent.findFirst({
+        where: and(eq(encounteredcontent.userId, userId), eq(encounteredcontent.characterId, characterId))
+    });
 
-    // TODO: This can be one pass not two, and much less ugly
+    const EncounteredContent =
+        EncounteredContentFromDB != undefined
+        ? JSON.parse(EncounteredContentFromDB.encounteredcontent)
+        : [];
 
-    let ToReturnRaw: any[] = [];
-
-    if(EncounteredContentFromDB != undefined){
-        const EncounteredContent = JSON.parse(EncounteredContentFromDB!.encounteredcontent);
-
-        for(let Content of EncounteredContent){
-            if(categoriesToQuery.includes(Content.category)){
-                ToReturnRaw.push(Content);
-            }
-        }
-    }
-
-    let ToReturn: any[] = [];
-
-    for(let i = 0; i < 8; i++){
-        if(categoriesToQuery.includes(i)){
-            const Content = [];
-
-            for(let CmpContent of ToReturnRaw){
-                if(CmpContent.category === i){
-                    Content.push(CmpContent.content);
-                }
-            }
-
-            ToReturn.push({
-                content: Content,
-                content_type: i
-            });
-        }
-    }
-
-    return ToReturn;
+    return categoriesToQuery.map((Category) => ({
+        content: EncounteredContent.filter((Content: any) =>
+            Number(Content.category) == Number(Category)
+        ).map((Content: any) => Content.content),
+        content_type: Number(Category),
+    }));
 }
 
 export async function AddEncounteredContent(userId: string, characterId: string, contentType: number, contentId: string){
