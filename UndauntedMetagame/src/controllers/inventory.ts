@@ -1,13 +1,16 @@
 import { and, eq } from "drizzle-orm";
 import { GetDb } from "../db";
-import { inventory } from "../db/schema";
+import { characters, inventory } from "../db/schema";
 import { GetCharacterWithUid } from "./character";
 import { logger } from "../logger";
 
-async function DoesInventoryBelongToUserId(UserId: string, CharacterId: string){
-    const CharacterFromDb = await GetCharacterWithUid(CharacterId, UserId);
+async function DoesCharacterBelongToUserId(UserId: string, CharacterId: string){
+    const Character = await GetDb().query.characters.findFirst({
+        columns: { characterId: true },
+        where: and(eq(characters.characterId, CharacterId), eq(characters.userId, UserId))
+    });
 
-    return CharacterFromDb != undefined;
+    return Character != undefined;
 }
 
 export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string, UpdateVersion: number){
@@ -36,7 +39,7 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
 }
 
 export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]){
-    if(!await DoesInventoryBelongToUserId(UserId, CharacterId)){
+    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
         logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
         return false;
     }
@@ -90,7 +93,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
 }
 
 export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string){
-    if(!await DoesInventoryBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
+    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
         return undefined;
     }
 
