@@ -2,6 +2,7 @@ import { Router } from "express";
 import { logger } from "../logger";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import progressionconfig from "../vendor/progression_config.json";
+import { UpdatePlayerActivity } from "../controllers/undauntedapi";
 
 export const systemRouter = Router();
 
@@ -10,19 +11,25 @@ systemRouter.get("/dauntless-status", (req, res) => {
 
     res.json({
 	    "show-status": true,
-	    "en": "Welcome to Undaunted v0.0.3!",
-	    "fr": "Welcome to Undaunted v0.0.3!",
-	    "it": "Welcome to Undaunted v0.0.3!",
-	    "es": "Welcome to Undaunted v0.0.3!",
-	    "de": "Welcome to Undaunted v0.0.3!",
-	    "pt": "Welcome to Undaunted v0.0.3!",
-	    "ru": "Welcome to Undaunted v0.0.3!",
-	    "ja": "Welcome to Undaunted v0.0.3!"
+	    "en": "Welcome to Undaunted v0.0.4!",
+	    "fr": "Welcome to Undaunted v0.0.4!",
+	    "it": "Welcome to Undaunted v0.0.4!",
+	    "es": "Welcome to Undaunted v0.0.4!",
+	    "de": "Welcome to Undaunted v0.0.4!",
+	    "pt": "Welcome to Undaunted v0.0.4!",
+	    "ru": "Welcome to Undaunted v0.0.4!",
+	    "ja": "Welcome to Undaunted v0.0.4!"
     });
 });
 
-systemRouter.post("/heartbeat", (req, res) => {
-    res.status(200).type("text/plain").send("20000");
+systemRouter.post("/heartbeat", HasUndauntedMetagameAuth, async (req: any, res) => {
+	const UserId = req.AuthData.userId;
+
+	const UserMap = req.body.map;
+
+	await UpdatePlayerActivity(UserId, UserMap);
+
+    res.status(200).type("text/plain").send("60");
 });
 
 systemRouter.post("/event", (req, res) => {

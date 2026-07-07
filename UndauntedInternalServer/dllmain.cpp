@@ -5,6 +5,8 @@
 #include <thread>
 #include <iostream>
 #include <ranges>
+#include <cwchar>
+#include <map>
 
 #include "framework.h"
 #include "SDK.hpp"
@@ -15,8 +17,6 @@
 #include "SDK/GameplayAbilities_parameters.hpp"
 #include "SDK/Archon_parameters.hpp"
 #include "SDK/lantern_equipped_ab_parameters.hpp"
-
-#include <cwchar>
 
 using namespace SDK;
 
@@ -32,9 +32,191 @@ namespace Globals {
     const wchar_t* ExpectedPlayerString = nullptr;
     int Port = 0;
     const wchar_t* MyIpAndPort = nullptr;
+    std::wstring MetagameAddress;
 
     bool EnableLogging = true;
 }
+
+std::map<std::wstring, std::wstring> EndpointMap = {};
+void EvalEndpointMap() {
+    static bool DidEvalEndpointMap = false;
+
+    if (DidEvalEndpointMap || Globals::MetagameAddress.size() == 0)
+        return;
+
+    DidEvalEndpointMap = true;
+
+    EndpointMap = {
+        {L"AuthEndpoint", L"http://" + Globals::MetagameAddress + L"/game/login"},
+        {L"AuthAvailableEndpoint", L"http://" + Globals::MetagameAddress + L"/checkavailable"},
+        {L"AuthTagsEndpoint", L"http://" + Globals::MetagameAddress + L"/tags"},
+        {L"AccountInfoEndpoint", L"http://" + Globals::MetagameAddress + L"/accountinfo"},
+        {L"DauntlessSessionTokenEndpoint", L"http://" + Globals::MetagameAddress + L"/gamesession/{linkedaccountservice}"},
+        {L"CreatePhoenixAccountEndpoint", L"http://" + Globals::MetagameAddress + L"/account"},
+        {L"LinkAccountEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link"},
+        {L"IsAccountLinkedEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link/{service}/{accountid}"},
+        {L"LinkPhoenixToServicePinGenerationEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link/pin/{service}/generate"},
+        {L"LinkPhoenixToServicePinStatusEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link/pin/{service}/status"},
+        {L"QueryLoginQueueEndpoint", L"http://" + Globals::MetagameAddress + L"/login"},
+        {L"PublicAccountInfoEndpoint", L"http://" + Globals::MetagameAddress + L"/accountinfo/public"},
+        {L"QueryAccountMappingsEndpoint", L"http://" + Globals::MetagameAddress + L"/account/mapping"},
+        {L"PlayerDataMigrationEndpoint", L"http://" + Globals::MetagameAddress + L"/account/migrate"},
+        {L"PhoenixEventsEndpoint", L"http://" + Globals::MetagameAddress + L"/event?id={environment}"},
+        {L"PhoenixEventsMessageEndpoint", L"http://" + Globals::MetagameAddress + L"/services/T02H74TGF/B8GG4RATX/EGSR335K7as3GFBq4dPCm7js"},
+        {L"CharacterEndpoint", L"http://" + Globals::MetagameAddress + L"/character"},
+        {L"FindCharacterEndpoint", L"http://" + Globals::MetagameAddress + L"/character/{characterid}"},
+        {L"CharacterNameEndpoint", L"http://" + Globals::MetagameAddress + L"/character/name"},
+        {L"FindCharactersEndpoint", L"http://" + Globals::MetagameAddress + L"/character/batch/account"},
+        {L"ResetCharacterEndpoint", L"http://" + Globals::MetagameAddress + L"/character"},
+        {L"InventoryEndpoint", L"http://" + Globals::MetagameAddress + L"/inventory"},
+        {L"InventoryGetAllEndpoint", L"http://" + Globals::MetagameAddress + L"/inventory/{accountid}/{characterid}"},
+        {L"InventoryGetInstanceItemsEndpoint", L"http://" + Globals::MetagameAddress + L"/inventory/instanceditemsbyaccount"},
+        {L"InventoryUpdateInstanceEndpoint", L"http://" + Globals::MetagameAddress + L"/inventory/instanceditem"},
+        {L"InventoryMigrateEndpoint", L"http://" + Globals::MetagameAddress + L"/inventory/{characterid}/{gameversion}"},
+        {L"DeleteProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}/{progressionid}"},
+        {L"ProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/progression"},
+        {L"ProgressionConfigEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/config"},
+        {L"FindProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}"},
+        {L"FindProgressionTrackEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}/{progressionid}"},
+        {L"FindObjectiveEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/objectives/{accountid}/{objectiveid}"},
+        {L"FindObjectivesEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/objectives/{accountid}"},
+        {L"GrantProgressionWithObjectives", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}"},
+        {L"GrantProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}/{progressionid}/{amount}"},
+        {L"ConfirmProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/progression/{accountid}/{progressionid}/{rank}/confirm/{kind}"},
+        {L"GetBountiesConfigEndpoint", L"http://" + Globals::MetagameAddress + L"/bounty/game-data"},
+        {L"GetBountiesEndpoint", L"http://" + Globals::MetagameAddress + L"/bounty/{accountid}"},
+        {L"SetBountiesEndpoint", L"http://" + Globals::MetagameAddress + L"/bounty/{accountid}"},
+        {L"GetPlayerJourneyEndpointServer", L"http://" + Globals::MetagameAddress + L"/pjm/{accountid}"},
+        {L"GetPlayerJourneyEndpointClient", L"http://" + Globals::MetagameAddress + L"/pjm"},
+        {L"SetPlayerJourneyEndpoint", L"http://" + Globals::MetagameAddress + L"/pjm/{accountid}"},
+        {L"DeleteBountiesEndpoint", L"http://" + Globals::MetagameAddress + L"/bounty/delete/{accountid}"},
+        {L"GetCooldownEndpoint", L"http://" + Globals::MetagameAddress + L"/cooldown/{accountid}"},
+        {L"StartCooldownEndpoint", L"http://" + Globals::MetagameAddress + L"/cooldown/{accountid}/{cooldownid}"},
+        {L"SetCooldownEndpoint", L"http://" + Globals::MetagameAddress + L"/cooldown/{accountid}"},
+        {L"SetCooldownBatchEndpoint", L"http://" + Globals::MetagameAddress + L"/cooldown/batch/{accountid}"},
+        {L"GetSeasonalEscalationEndpoint", L"http://" + Globals::MetagameAddress + L"/escalation/{season_id}/{account_id}"},
+        {L"UpdateSeasonalEscalationEndpoint", L"http://" + Globals::MetagameAddress + L"/escalation/{season_id}/{account_id}"},
+        {L"GameTuningEndpoint", L"http://" + Globals::MetagameAddress + L"/game_tuning/{blobid}"},
+        {L"SelectedHuntPassEndpoint", L"http://" + Globals::MetagameAddress + L"/huntpass/{accountid}"},
+        {L"TitleNewsEndpoint", L"http://" + Globals::MetagameAddress + L"/patcher-news/{environment}.json"},
+        {L"LoginNewsEndpoint", L"http://" + Globals::MetagameAddress + L"/motd/"},
+        {L"AfterHuntNewsEndpoint", L"http://" + Globals::MetagameAddress + L"/motd/trigger?event_name={eventname}"},
+        {L"MailboxQueryEndpoint", L"http://" + Globals::MetagameAddress + L"/all/"},
+        {L"MailboxQuerySurveyEndpoint", L"http://" + Globals::MetagameAddress + L"/survey/{surveyid}"},
+        {L"MessageInboxReadEndpoint", L"http://" + Globals::MetagameAddress + L"/mailbox/markAsRead"},
+        {L"MessageInboxDeletedEndpoint", L"http://" + Globals::MetagameAddress + L"/mailbox/markAsDeleted"},
+        {L"MessageInboxClaimItemEndpoint", L"http://" + Globals::MetagameAddress + L"/mailbox/redeemParcel"},
+        {L"MailboxSubmitSurveyEndpoint", L"http://" + Globals::MetagameAddress + L"/survey/responses"},
+        {L"MailboxClaimSurveyRewardEndpoint", L"http://" + Globals::MetagameAddress + L"/survey/redeemReward"},
+        {L"MailboxSurveyEndpoint", L"http://" + Globals::MetagameAddress + L"/survey"},
+        {L"ExperimentalRealmValidationEndpoint", L"http://" + Globals::MetagameAddress + L"/experiment/validate"},
+        {L"SanitizeEndpoint", L"http://" + Globals::MetagameAddress + L"/check"},
+        {L"GuildEndpoint", L"http://" + Globals::MetagameAddress + L"/guild"},
+        {L"GuildInvitesEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/invites"},
+        {L"FindGuildEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/{guildid}"},
+        {L"FindCharactersGuildEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/member/{characterid}"},
+        {L"GuildMemberEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/member"},
+        {L"GuildInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/invite"},
+        {L"GuildViewCharacterInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/invite/member/{characterid}"},
+        {L"GuildAcceptInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/invite/accept"},
+        {L"GuildViewGuildInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/invite/guild"},
+        {L"GuildLeaderEndpoint", L"http://" + Globals::MetagameAddress + L"/guild/leader"},
+        {L"GuildCreateValidateEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/validate"},
+        {L"GuildEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild"},
+        {L"GuildDisbandEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/{guildId}"},
+        {L"GuildViewInvitesEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/invite/player"},
+        {L"GuildInviteEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/invite/{accountId}"},
+        {L"GuildInviteAcceptEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/invite/accept/{guild_invite_id}"},
+        {L"GuildInviteDeclineEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/invite/{guild_invite_id}"},
+        {L"GuildLeaveEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/player"},
+        {L"GuildKickEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/player/{accountId}"},
+        {L"GuildChangeRankEndpoint_v2", L"http://" + Globals::MetagameAddress + L"/guild/rank/{accountId}/{rank}"},
+        {L"PartyEndpoint", L"http://" + Globals::MetagameAddress + L"/party"},
+        {L"PartyStatusEndpoint", L"http://" + Globals::MetagameAddress + L"/party/status"},
+        {L"PartyMemberEndpoint", L"http://" + Globals::MetagameAddress + L"/party/member"},
+        {L"PartyKickMemberEndpoint", L"http://" + Globals::MetagameAddress + L"/party/member/{memberid}"},
+        {L"PartyRemoveOfflineLeaderEndpoint", L"http://" + Globals::MetagameAddress + L"/party/leader/{leaderid}"},
+        {L"PartyPromoteEndpoint", L"http://" + Globals::MetagameAddress + L"/party/member/promote/{memberId}"},
+        {L"PartyInvitesEndpoint", L"http://" + Globals::MetagameAddress + L"/party/invites"},
+        {L"PartyInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/party/invite"},
+        {L"PartyAcceptInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/party/invite/accept/{inviteId}"},
+        {L"PartyMemberSetConsoleSessionEndpoint", L"http://" + Globals::MetagameAddress + L"/party/console_session"},
+        {L"PartyFinderCreateEndpoint", L"http://" + Globals::MetagameAddress + L"/party/finder/entry/create"},
+        {L"PartyFinderEntryEndpoint", L"http://" + Globals::MetagameAddress + L"/party/finder/entry/{partyId}"},
+        {L"PartyFinderJoinEndpoint", L"http://" + Globals::MetagameAddress + L"/party/finder/join/{partyId}"},
+        {L"PartyFinderListEntriesEndpoint", L"http://" + Globals::MetagameAddress + L"/party/finder/entries"},
+        {L"ExpectedPlayerStatusEndpoint", L"http://" + Globals::MetagameAddress + L"/candidate/player/alive"},
+        {L"KeepAlivePlayerStatusEndpoint", L"http://" + Globals::MetagameAddress + L"/candidate/player/alive"},
+        {L"StoreEndpointDev", L"http://" + Globals::MetagameAddress + L"/{tracking}#{path}"},
+        {L"StoreEndpoint", L"http://" + Globals::MetagameAddress + L"/{tracking}#{path}"},
+        {L"StoreInternationalEndpointDev", L"http://" + Globals::MetagameAddress + L"/{locale}/{tracking}#{path}"},
+        {L"StoreInternationalEndpoint", L"http://" + Globals::MetagameAddress + L"/{locale}/{tracking}#{path}"},
+        {L"StoreGetItemByTagEndpoint", L"http://" + Globals::MetagameAddress + L"/product/skus/public?requiredTags={tag}"},
+        {L"StoreGetItemByIdEndpoint", L"http://" + Globals::MetagameAddress + L"/product/sku/{sku_id}"},
+        {L"StorePurchaseItemEndpoint", L"http://" + Globals::MetagameAddress + L"/token/{currency}/{sku_id}"},
+        {L"StorePurchaseItemConfirmEndpoint", L"http://" + Globals::MetagameAddress + L"/notification/{currency}?token={purchase_token}"},
+        {L"StoreReconcileUrl", L"http://" + Globals::MetagameAddress + L"/reconcile"},
+        {L"StoreBalancesEndpoint", L"http://" + Globals::MetagameAddress + L"/balance"},
+        {L"SupportACreatorEndpoint", L"http://" + Globals::MetagameAddress + L"/creator"},
+        {L"EntitlementsEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementsv2"},
+        {L"GrantEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementv2/{accountid}"},
+        {L"RevokeEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlement/{accountid}/{entitlement}"},
+        {L"ServiceSessionEndpoint", L"http://" + Globals::MetagameAddress + L"/ws/{accountid}"},
+        {L"QueryUserPresenceEndpoint", L"http://" + Globals::MetagameAddress + L"/present/{accountid}"},
+        {L"MatchmakingEndpoint", L"http://" + Globals::MetagameAddress},
+        {L"TrackingEndpoint", L"http://" + Globals::MetagameAddress},
+        {L"VoiceChatLoginEndpoint", L"http://" + Globals::MetagameAddress + L"/vivox/login"},
+        {L"VoiceChatJoinPartyEndpoint", L"http://" + Globals::MetagameAddress + L"/vivox/join/party/{channel_type}"},
+        {L"VoiceChatJoinGameEndpoint", L"http://" + Globals::MetagameAddress + L"/vivox/join/game/{game_id}/{channel_type}"},
+        {L"VoiceChatJoinDebugEndpoint", L"http://" + Globals::MetagameAddress + L"/vivox/join/channel/{channel_id}/{channel_type}"},
+        {L"PlatformPoolRegistrationEndpoint", L"http://" + Globals::MetagameAddress + L"/candidate/player/register"},
+        {L"CheckCrossPlayProgressionEndpoint", L"http://" + Globals::MetagameAddress + L"/features/platform/{platform}"},
+        {L"LeaderboardDisplayNameRefreshEndpoint", L"http://" + Globals::MetagameAddress + L"/profile/update"},
+        {L"PhoenixStatusMessageEndpoint", L"http://" + Globals::MetagameAddress + L"/dauntless-status"},
+        {L"TrialsLeaderboardsEndpoint", L"http://" + Globals::MetagameAddress + L"/trials/leaderboards"},
+        {L"TrialsSoloLeaderboardsEndpoint", L"http://" + Globals::MetagameAddress + L"/trials/leaderboards/solo"},
+        {L"TrialsSoloEntryEndpoint", L"http://" + Globals::MetagameAddress + L"/trials/leaderboards/solo/individual"},
+        {L"TrialsGroupLeaderboardsEndpoint", L"http://" + Globals::MetagameAddress + L"/trials/leaderboards/group"},
+        {L"TrialsGroupEntryEndpoint", L"http://" + Globals::MetagameAddress + L"/trials/leaderboards/group/individual"},
+        {L"GetActiveLoadoutEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}"},
+        {L"GetAllLoadoutsEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/all"},
+        {L"UpdateLoadoutSlotEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/{index}"},
+        {L"UpdateLoadoutSlotSetActiveEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/active/{index}"},
+        {L"UpdateLoadoutPersistentEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/persistent"},
+        {L"UpdateActiveLoadoutSlotEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/active/{index}"},
+        {L"UnlockAccountSlotEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/unlock/{num_slots}"},
+        {L"UnlockCharacterSlotEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/unlock/{num_slots}"},
+        {L"GetAccountSlotCountEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/slotcount"},
+        {L"GetCharacterSlotCountEndpoint", L"http://" + Globals::MetagameAddress + L"/loadout/{account_id}/{character_id}/slotcount"},
+        {L"PlayerInboxMessageEndpoint", L"http://" + Globals::MetagameAddress + L"/subscription"},
+        {L"PlayerNewsletterSubscribeEndpoint", L"http://" + Globals::MetagameAddress + L"/subscription"},
+        {L"PlayerNewsletterResendEndpoint", L"http://" + Globals::MetagameAddress + L"/subscription/verify/resend"},
+        {L"BreadcrumbPlayerEndpoint", L"http://" + Globals::MetagameAddress + L"/breadcrumbs/{character_id}"},
+        {L"EncounteredContentGetEndpoint", L"http://" + Globals::MetagameAddress + L"/encountered-content/{character_id}/{content_type}"},
+        {L"EncounteredContentQueryEndpoint", L"http://" + Globals::MetagameAddress + L"/encountered-content/query/{character_id}"},
+        {L"EncounteredContentUpdateEndpoint", L"http://" + Globals::MetagameAddress + L"/encountered-content/{character_id}"},
+        {L"CohortsEndpoint", L"http://" + Globals::MetagameAddress + L"/playertreatments/{account_id}"},
+        {L"GetEventStatsEndpoint", L"http://" + Globals::MetagameAddress + L"/eventstats/"},
+        {L"IncrementEventStatsEndpoint", L"http://" + Globals::MetagameAddress + L"/eventstats/increment"},
+        {L"LinkedSlayersInviteEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/invite"},
+        {L"LinkedSlayersAllInvitesEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/invites"},
+        {L"LinkedSlayersInviteAcceptDeclineEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/invite"},
+        {L"LinkedSlayersInviteCancelEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/invite"},
+        {L"LinkedSlayersDeleteAllInvitesEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/invites/{account_id}"},
+        {L"LinkedSlayersAllLinksProgressEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/progress"},
+        {L"LinkedSlayersAddLinkProgressEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/progress"},
+        {L"LinkedSlayersAllLinkSlotsDataEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/links"},
+        {L"LinkedSlayersDeleteInviteDataEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/link"},
+        {L"LinkedSlayersSendRewardsEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/links/rewards"},
+        {L"LinkedSlayersGetFriendsAvailabilityEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/availability"},
+        {L"LinkedSlayersGetRewardsGrantEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/links/rewards/{account_id}/{slot}"},
+        {L"LinkedSlayersSetEndTimeEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/links/endtime"},
+        {L"LinkedSlayersSetRemainingTimeEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/links/timeleft"},
+        {L"LinkedSlayersStatusEndpoint", L"http://" + Globals::MetagameAddress + L"/slayerlink/status_good"},
+        {L"AccountCheckpointDebugEndpoint", L"http://" + Globals::MetagameAddress + L"/checkpoint/account/save"},
+    };
+}
+
 
 __declspec(dllexport) const char* DummyLinkFunc() {
     return "mrow :3";
@@ -102,6 +284,8 @@ FString* GetGameDefaultMap(FString* a1) {
 
     *Ret = FinalURL.c_str();
 
+    //*Ret = L"ramsgate_01_persistent?game=/Game/Blueprints/BPGM_Archon_Prototype.BPGM_Archon_Prototype_C?MonsterClass=/Game/Monsters/mcrollin/mcbeaver_tutorial_bp.mcbeaver_tutorial_bp_C";
+
     //*Ret = L"/Game/Maps/islands/1705/dia_moss_triforce?MonsterClass=/Game/Monsters/mcrollin/mcbeaver_tutorial_bp.mcbeaver_tutorial_bp_C";
     //*Ret = L"/Game/Maps/islands/1705/dia_snow_big?MonsterClass=/Game/Monsters/mcrollin/mcbeaver_tutorial_bp.mcbeaver_tutorial_bp_C?HuntId=CR19_MatchmakerHunt_Beaver?PlayerHuntIds=GWOG-UID-1:CR19_PlayerHunt_Expedition_Island04,GWOG-UID-2:CR19_PlayerHunt_Expedition_Island04,GWOG-UID-3:CR19_PlayerHunt_Expedition_Island04?ZonePreset=0";
     //*Ret = L"/Game/Maps/ramsgate/ramsgate_01_persistent";
@@ -146,15 +330,17 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
             if (!Obj)
                 continue;
 
-            if (Obj->IsA(SDK::AActor::StaticClass()))
-            {
-                AActor* Quest = (AActor*)Obj;
-                
-                if (Quest->Role != ENetRole::ROLE_Authority) {
-                    std::cout << (int)(uint8_t)Quest->Role << std::endl;
+            if (Obj->IsDefaultObject())
+                continue;
 
-                    std::cout << Quest->GetFullName() << std::endl;
-                }
+            if (Obj->IsA(SDK::AArchonPlayerController::StaticClass()))
+            {
+                AArchonPlayerController* Quest = (AArchonPlayerController*)Obj;
+                
+                UArchonCheatManager* CheatMan = (UArchonCheatManager*)UGameplayStatics::SpawnObject(UArchonCheatManager::StaticClass(), Quest);
+
+                Quest->CheatManager = CheatMan;
+                Quest->EnableCheats();
             }
         }
 
@@ -353,8 +539,7 @@ bool MakeDoDamageHook(void* a1, void* a2, void* a3) {
 void* OrigProcessEventClient = nullptr;
 
 void ProcessEventClientHook(UObject* Object, UFunction* Function, void* Parms) {
-    /*
-    if (GetAsyncKeyState(VK_F9)) {
+    if (GetAsyncKeyState(VK_F7)) {
         for (int i = 0; i < SDK::UObject::GObjects->Num(); i++)
         {
             SDK::UObject* Obj = SDK::UObject::GObjects->GetByIndex(i);
@@ -362,19 +547,24 @@ void ProcessEventClientHook(UObject* Object, UFunction* Function, void* Parms) {
             if (!Obj)
                 continue;
 
-            if (Obj->IsA(SDK::AActor::StaticClass()))
+            if (Obj->IsDefaultObject())
+                continue;
+
+            if (Obj->IsA(SDK::AArchonPlayerController::StaticClass()))
             {
-                if (((AActor*)Obj)->Role == ENetRole::ROLE_Authority) {
-                    std::cout << Obj->GetFullName() << std::endl;
-                }
+                AArchonPlayerController* Quest = (AArchonPlayerController*)Obj;
+                
+                UArchonCheatManager* CheatMan = (UArchonCheatManager*)UGameplayStatics::SpawnObject(UArchonCheatManager::StaticClass(), Quest);
+
+                Quest->CheatManager = CheatMan;
+                Quest->EnableCheats();
             }
         }
-        
-        while (GetAsyncKeyState(VK_F9)) {
+
+        while (GetAsyncKeyState(VK_F7)) {
 
         }
     }
-    */
 
     reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEventClient)(Object, Function, Parms);
 }
@@ -441,12 +631,44 @@ void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
     reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEvent)(Object, Function, Parms);
 }
 
+void* OrigConfigCacheIniGetString = nullptr;
+
+bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_t* Key, FString* Value, FString* Filename) {
+    EvalEndpointMap();
+
+    if (EndpointMap.contains(Key)) {
+        *Value = FString(EndpointMap.at(Key).c_str());
+
+        return true;
+    }
+
+    if (std::wstring(Section).contains(L"Mcp")) {
+        if (std::wstring(Key).contains(L"protocol") || std::wstring(Key).contains(L"Protocol")) {
+            *Value = FString(L"http");
+
+            return true;
+        }
+        
+        if (std::wstring(Key).contains(L"Domain") || std::wstring(Key).contains(L"RedirectUrl")) {
+            *Value = FString(Globals::MetagameAddress.c_str());
+
+            return true;
+        }
+    }
+    
+    return reinterpret_cast<bool(*)(void* a1, const wchar_t* Section, const wchar_t* Key, FString * Value, FString * Filename)>(OrigConfigCacheIniGetString)(a1, Section, Key, Value, Filename);
+}
+
 void InitClientHooks() {
     MH_Initialize();
 
     MH_CreateHook((void*)(Globals::BaseAddress + 0x1528000), HasFinishedLoadingHook, &OrigHasFinishedLoading);
 
     MH_EnableHook((void*)(Globals::BaseAddress + 0x1528000));
+
+    MH_CreateHook((void*)(Globals::BaseAddress + 0x1D09D50), ConfigCacheInitGetStringHook, &OrigConfigCacheIniGetString);
+
+    MH_EnableHook((void*)(Globals::BaseAddress + 0x1D09D50));
 
     //1469E00
 
@@ -720,6 +942,14 @@ void Init() {
             std::cout << "thanks to all who contributed in any way, you know who you are, dm me on discord if you want a named shoutout here :3" << std::endl;
 
             std::cout << "Running as a debug-enabled client!" << std::endl;
+        }
+
+        int NumArgs = 0;
+
+        wchar_t** Args = CommandLineToArgvW(GetCommandLineW(), &NumArgs);
+
+        if (NumArgs > 2) {
+            Globals::MetagameAddress = Args[1];
         }
 
         InitClientHooks();

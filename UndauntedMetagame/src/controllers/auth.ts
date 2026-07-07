@@ -7,7 +7,7 @@ import { logger } from "../logger";
 const PRIVKEY = Buffer.from(process.env.AUTH_SIGNING_PRIVKEY_B64!, "base64").toString("utf-8");
 const PUBKEY = Buffer.from(process.env.AUTH_SIGNING_PUBKEY_B64!, "base64").toString("utf-8");
 
-function HashUserAPIKey(UserAPIKeyToHash: string){
+export function HashUserAPIKey(UserAPIKeyToHash: string){
     return crypto.createHash("sha256").update(UserAPIKeyToHash, "utf8").digest("hex");
 }
 

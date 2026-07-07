@@ -2,7 +2,10 @@
 <html>
 
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8"     
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
+    />
     <title>Undaunted Launcher</title>
 
   </head>
@@ -145,100 +148,5 @@
     </section>
     <section id="loading" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat bg-dark bg-blend-multiply">
     </section>
-    
-    <!--
-    <div>
-      <h3 id="UserInfo">Not logged in!</h3>
-      <p id="PlayerCount"></p>
-    </div>
-
-    <div>
-      <h4>Login Zone</h4>
-      <label for="UndauntedUserApiKey">User API Key: </label>
-      <input id="UndauntedUserApiKey" type="password" placeholder="UUK..."></textarea>
-      <div></div>
-      <button id="Login">Login</button>
-      <button id="Logout">Logout</button>
-    </div>
-
-    <div>
-      <h4>Registration Zone</h4>
-      <p id="RegistrationStatusText">Registrations are currently disabled!</p>
-      <div id="RegistrationInviteCodePanel">
-        <label for="RegistrationInviteCodeInput">Invite Code:</label>
-        <input type="text" id="RegistrationInviteCodeInput">
-      </div>
-      <div id="RegistrationMainPanel">
-        <label for="RegistrationUsernameInput">Username to Register:</label>
-        <input type="text" id="RegistrationUsernameInput">
-        <div></div>
-        <button id="RegisterButton">Register!</button>
-      </div>
-      <p id="RegistrationResultText"></p>
-    </div>
-
-    <div id="AdminPanel">
-      <h4>Admin Zone</h4>
-      <h5>Registration Mode</h5>
-        <p id="AdminCurrentRegistrationMode">Registration Mode: Open</p>
-        <label>
-          <input id="AdminRegistrationModeRadioDisabled" type="radio" name="size" value="NONE" checked="true">
-          Disabled
-        </label>
-    
-        <label>
-          <input id="AdminRegistrationModeRadioInviteCode" type="radio" name="size" value="INVITECODE">
-          Invite Code Required
-        </label>
-    
-        <label>
-          <input id="AdminRegistrationModeRadioOpen" type="radio" name="size" value="OPEN">
-          Open
-        </label>
-        <p></p>
-        <button id="AdminUpdateCurrentRegistrationMode">Update Current Registration Mode</button>
-        <p></p>
-        <h5>Invite Codes</h5>
-        <label for="AdminNewInviteCodeText">Invite Code:</label>
-        <input id="AdminNewInviteCodeText" type="text">
-        <label for="AdminNewInviteCodeUses">Uses:</label>
-        <input id="AdminNewInviteCodeUses" type="number" value="1">
-        <label for="AdminNewInviteCodeInfiniteUses">Infinite Uses:</label>
-        <input id="AdminNewInviteCodeInfiniteUses" type="checkbox">
-        <button id="AdminAddNewInviteCode">Add Invite Code</button>
-        <table border="1">
-          <tr>
-            <th>Invite Code</th>
-            <th>Uses Remaining</th>
-            <th>Infinite Uses</th>
-          </tr>
-          <tbody id="AdminInviteCodesTable"></tbody>
-        </table>
-        <label for="AdminDeleteInviteCodeText">Invite Code:</label>
-        <input id="AdminDeleteInviteCodeText" type="text">
-        <button id="AdminDeleteInviteCode">Delete Invite Code</button>
-    </div>
-
-    <div>
-      <h4>Migration Zone</h4>
-      <button id="MigrateLegacyInstallButton">Migrate Legacy Undaunted Install</button>
-    </div>
-
-    <div>
-      <h4>Install Zone</h4>
-      <button id="PatchUndauntedInstallButton">Patch Undaunted Install</button>
-      <div></div>
-      <button id="DownloadAndInstallUndauntedButton">Download & Install Undaunted</button>
-      <div></div>
-      <label id="UndauntedDownloadLabel" for="UndauntedDownload">Undaunted Download (0%):</label>
-      <progress id="UndauntedDownload" max="100" value="0">0%</progress>
-    </div>
-    
-    <div>
-      <h4>Play Undaunted</h4>
-      <button id="PlayUndauntedButton">Play Undaunted!</button>
-      <button id="StopUndauntedButton">Close Game</button>
-    </div>
-    -->
   </body>
 </html>
