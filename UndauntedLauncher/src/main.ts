@@ -237,7 +237,7 @@ function HashFileAsync(FilePath: string){
   })
 }
 
-function MigrateLegacyUndauntedInstall(){
+async function MigrateLegacyUndauntedInstall(){
   const DialogResult = dialog.showOpenDialogSync({properties: ["openDirectory"], title: "Select where your Legacy Undaunted install is, the folder you select should contain the \"Archon\", \"EasyAntiCheat\", and \"Engine\" folders."});
 
   if(DialogResult == undefined){
@@ -292,7 +292,7 @@ function MigrateLegacyUndauntedInstall(){
 
   WriteDataFile();
   
-  return true;
+  return await PatchUndauntedInstall();
 }
 
 function PatchUndauntedInstall(){
@@ -543,7 +543,7 @@ async function GetVersion(){
 }
 
 ipcMain.handle("MigrateLegacyUndauntedInstall", async () => {
-  if(MigrateLegacyUndauntedInstall()){
+  if(await MigrateLegacyUndauntedInstall()){
     console.log("Migrated");
   }
   else{
