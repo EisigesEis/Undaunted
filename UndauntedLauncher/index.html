@@ -1,0 +1,244 @@
+<!doctype html>
+<html>
+
+  <head>
+    <meta charset="UTF-8" />
+    <title>Undaunted Launcher</title>
+
+  </head>
+  <body>
+    <link rel="stylesheet" href="src/index.css">
+    <script type="module" src="/src/renderer.ts"></script>
+    <section id="login" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
+      <div class="flex flex-col items-center justify-center px-6 py-8 mx-auto md:h-screen lg:py-0">
+          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
+              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
+                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
+                      Welcome back, Slayer
+                  </h1>
+                  <form class="space-y-4 md:space-y-6">
+                      <div>
+                          <label for="userapikey" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">User API Key</label>
+                          <input name="userapikey" id="userapikey" placeholder="UUK••••••••" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
+                      </div>
+                      <button id="loginbutton" class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Login</button>
+                      <p class="text-sm font-light text-gray-500 dark:text-gray-400">
+                          Have an old Undaunted install with a bat file? <a href="#" id="migratelegacyinstallbutton2" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Migrate Legacy Install</a>
+                      </p>
+                      <p id="registrationsclosed" class="text-sm font-light text-gray-500 dark:text-gray-400">
+                          Registrations are currently closed
+                      </p>
+                      <p id="registrationsinvitecode" class="text-sm font-light text-gray-500 dark:text-gray-400">
+                          Have an invite code? <a id="inviteregisteraccount" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Register with an Invite Code</a>
+                      </p>
+                      <p id="registrationsopen" class="text-sm font-light text-gray-500 dark:text-gray-400">
+                          Need an account? <a id="openregisteraccount" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Register a new account</a>
+                      </p>
+                  </form>
+              </div>
+          </div>
+      </div>
+    </section>
+    <section id="register" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
+      <div class="flex flex-col items-center justify-center px-6 py-8 mx-auto md:h-screen lg:py-0">
+          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
+              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
+                  <button id="backtologin" class="text-body bg-grey-primary border border-default hover:bg-grey-secondary-soft focus:ring-4 focus:ring-grey-tertiary font-medium leading-5 rounded-base text-sm text-white px-4 py-2.5 focus:outline-none">Back To Login</button>
+                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
+                      The Shattered Isles Await...
+                  </h1>
+                  <div class="space-y-4 md:space-y-6">
+                      <div>
+                          <label for="username" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Username</label>
+                          <input name="username" id="username" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
+                      </div>
+                      <div id="invitecodepanel">
+                          <label for="invitecode" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Invite Code</label>
+                          <input name="invitecode" id="invitecode" placeholder="••••••••" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
+                      </div>
+                      <button id="registersubmitbutton" class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Register</button>
+                      <p class="text-sm font-light text-gray-500 dark:text-gray-400">
+                          Have an old Undaunted install with a bat file? <a id="migratelegacyinstallbutton1" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Migrate Legacy Install</a>
+                      </p>
+                  </div>
+              </div>
+          </div>
+      </div>
+    </section>
+    <section id="registercomplete" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
+      <div class="flex flex-col items-center justify-center px-6 py-10 mx-auto md:h-screen lg:py-0">
+          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
+              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
+                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
+                      Registration Complete
+                  </h1>
+                  <p id="registrationcompletetext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">Your User API Key is "UUK_ABC123". Please keep it safe, it will not be shown again.</p>
+                  <form class="space-y-4 md:space-y-6">
+                      <button id="registrationcompleteclosebutton" class="w-full text-white hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Close</button>
+                  </form>
+              </div>
+          </div>
+      </div>
+    </section>
+    <section id="install" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
+      <div class="flex flex-col items-center justify-center px-6 py-10 mx-auto md:h-screen lg:py-0">
+          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
+              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
+                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
+                      Install Undaunted
+                  </h1>
+                  <div id="selectinstallfolderpanel">
+                    <p id="registrationcompletetext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">This will require a 10GB download, and 25GB of free storage space.</p>
+                    <form class="space-y-4 md:space-y-6">
+                        <button id="selectinstallfolderbutton" class="w-full text-white hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Select Install Location</button>
+                    </form>
+                  </div>
+                  <div id="installundauntedprogressbar">
+                    <p id="installprogresstext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">Downloading Undaunted...</p>
+                    <div id="installprogress" class="w-full bg-neutral-quaternary rounded-full h-2">
+                      <div id="installprogressbar" class="bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
+                    </div>
+                  </div>
+              </div>
+          </div>
+      </div>
+    </section>
+    <section id="play" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat bg-dark bg-blend-multiply">
+      <div id="homepage" class="px-4 mx-auto max-w-screen-xl text-center py-24 lg:py-56">
+          <h1 id="homeusername" class="mb-6 text-4xl font-bold tracking-tighter text-white md:text-5xl lg:text-6xl">Welcome Back, gwog :3</h1>
+          <span id="versiontext" class="bg-brand-softer text-fg-brand-strong text-sm font-medium px-2 py-1 rounded">Undaunted v0.0.4</span>
+          <span id="playercounttext" class="bg-success-soft text-fg-success-strong text-sm font-medium px-2 py-1 rounded">0 Player(s) online</span>
+      </div>
+      <nav class="bg-gray-800 fixed w-full z-20 bottom-0 start-0 ">
+        <div class="max-w-screen-xl flex flex-wrap items-center justify-between mx-auto p-4">
+        <div class="inline-flex md:order-2 space-x-3 md:space-x-0 rtl:space-x-reverse">
+            <button id="playbutton" type="button" class="text-white bg-brand hover:bg-brand-strong box-border border border-transparent focus:ring-4 focus:ring-brand-medium shadow-xs font-medium leading-5 rounded-base text-sm px-3 py-2 focus:outline-none">Play Game</button>
+            <button id="exitbutton" type="button" class="text-danger border border-danger hover:bg-danger hover:text-white focus:ring-4 focus:ring-neutral-tertiary font-medium leading-5 rounded-base text-sm px-4 py-2.5 focus:outline-none">Exit Game</button>
+        </div>
+        <div class="items-center justify-between hidden w-full md:flex md:w-auto md:order-1" id="navbar-cta">
+          <ul class="font-medium flex flex-col p-4 md:p-0 mt-4 border border-default rounded-base  md:flex-row md:space-x-8 rtl:space-x-reverse md:mt-0 md:border-0 ">
+            <div class="inline-flex rounded-base shadow-xs -space-x-px" role="group">
+              <button type="button" class="text-white bg-gray-800 border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-s-base text-sm px-3 py-2 focus:outline-none">
+                Home
+              </button>
+              <button id="logoutbutton" type="button" class="text-white bg-gray-800 border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-e-base text-sm px-3 py-2 focus:outline-none">
+                Logout
+              </button>
+            </div>
+            <!--
+            <div class="inline-flex rounded-base shadow-xs -space-x-px" role="group">
+              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-s-base text-sm px-3 py-2 focus:outline-none">
+                Status
+              </button>
+              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 text-sm px-3 py-2 focus:outline-none">
+                Players
+              </button>
+              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-e-base text-sm px-3 py-2 focus:outline-none">
+                Registration
+              </button>
+            </div>
+            -->
+          </ul>
+        </div>
+        </div>
+      </nav>
+    </section>
+    <section id="loading" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat bg-dark bg-blend-multiply">
+    </section>
+    
+    <!--
+    <div>
+      <h3 id="UserInfo">Not logged in!</h3>
+      <p id="PlayerCount"></p>
+    </div>
+
+    <div>
+      <h4>Login Zone</h4>
+      <label for="UndauntedUserApiKey">User API Key: </label>
+      <input id="UndauntedUserApiKey" type="password" placeholder="UUK..."></textarea>
+      <div></div>
+      <button id="Login">Login</button>
+      <button id="Logout">Logout</button>
+    </div>
+
+    <div>
+      <h4>Registration Zone</h4>
+      <p id="RegistrationStatusText">Registrations are currently disabled!</p>
+      <div id="RegistrationInviteCodePanel">
+        <label for="RegistrationInviteCodeInput">Invite Code:</label>
+        <input type="text" id="RegistrationInviteCodeInput">
+      </div>
+      <div id="RegistrationMainPanel">
+        <label for="RegistrationUsernameInput">Username to Register:</label>
+        <input type="text" id="RegistrationUsernameInput">
+        <div></div>
+        <button id="RegisterButton">Register!</button>
+      </div>
+      <p id="RegistrationResultText"></p>
+    </div>
+
+    <div id="AdminPanel">
+      <h4>Admin Zone</h4>
+      <h5>Registration Mode</h5>
+        <p id="AdminCurrentRegistrationMode">Registration Mode: Open</p>
+        <label>
+          <input id="AdminRegistrationModeRadioDisabled" type="radio" name="size" value="NONE" checked="true">
+          Disabled
+        </label>
+    
+        <label>
+          <input id="AdminRegistrationModeRadioInviteCode" type="radio" name="size" value="INVITECODE">
+          Invite Code Required
+        </label>
+    
+        <label>
+          <input id="AdminRegistrationModeRadioOpen" type="radio" name="size" value="OPEN">
+          Open
+        </label>
+        <p></p>
+        <button id="AdminUpdateCurrentRegistrationMode">Update Current Registration Mode</button>
+        <p></p>
+        <h5>Invite Codes</h5>
+        <label for="AdminNewInviteCodeText">Invite Code:</label>
+        <input id="AdminNewInviteCodeText" type="text">
+        <label for="AdminNewInviteCodeUses">Uses:</label>
+        <input id="AdminNewInviteCodeUses" type="number" value="1">
+        <label for="AdminNewInviteCodeInfiniteUses">Infinite Uses:</label>
+        <input id="AdminNewInviteCodeInfiniteUses" type="checkbox">
+        <button id="AdminAddNewInviteCode">Add Invite Code</button>
+        <table border="1">
+          <tr>
+            <th>Invite Code</th>
+            <th>Uses Remaining</th>
+            <th>Infinite Uses</th>
+          </tr>
+          <tbody id="AdminInviteCodesTable"></tbody>
+        </table>
+        <label for="AdminDeleteInviteCodeText">Invite Code:</label>
+        <input id="AdminDeleteInviteCodeText" type="text">
+        <button id="AdminDeleteInviteCode">Delete Invite Code</button>
+    </div>
+
+    <div>
+      <h4>Migration Zone</h4>
+      <button id="MigrateLegacyInstallButton">Migrate Legacy Undaunted Install</button>
+    </div>
+
+    <div>
+      <h4>Install Zone</h4>
+      <button id="PatchUndauntedInstallButton">Patch Undaunted Install</button>
+      <div></div>
+      <button id="DownloadAndInstallUndauntedButton">Download & Install Undaunted</button>
+      <div></div>
+      <label id="UndauntedDownloadLabel" for="UndauntedDownload">Undaunted Download (0%):</label>
+      <progress id="UndauntedDownload" max="100" value="0">0%</progress>
+    </div>
+    
+    <div>
+      <h4>Play Undaunted</h4>
+      <button id="PlayUndauntedButton">Play Undaunted!</button>
+      <button id="StopUndauntedButton">Close Game</button>
+    </div>
+    -->
+  </body>
+</html>
