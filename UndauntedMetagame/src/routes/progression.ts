@@ -1,11 +1,23 @@
 import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
-import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
+import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, ProgressionError, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
 
 // TODO: We will be gaining progression support very soon, but for now just a stub
 
 export const progressionRouter = Router();
+
+function StatusForProgressionError(Error: ProgressionError){
+    switch(Error){
+        case "forbidden":
+            return 403;
+        case "conflict":
+            return 409;
+        case "invalid_data":
+        case "db_error":
+            return 500;
+    }
+}
 
 progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndauntedMetagameAuth, async (req: any, res) => {
     const RequestorAccountId = req.AuthData.userId;
@@ -14,14 +26,20 @@ progressionRouter.get("/encountered-content/:characterId/:contentType", HasUndau
 
     logger.info(`Querying encountered content for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, [ContentType]);
+    const ContentResult = await QueryEncounteredContent(RequestorAccountId, CharacterId, [ContentType]);
+
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.send({
         code: null,
         message: "OK",
         payload: {
-            content_types: Content,
+            content_types: ContentResult.data,
             success: true
         }
     });
@@ -34,14 +52,20 @@ progressionRouter.post("/encountered-content/query/:characterId", HasUndauntedMe
 
     logger.info(`Querying encountered content for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    const Content = await QueryEncounteredContent(RequestorAccountId, CharacterId, ContentTypes);
+    const ContentResult = await QueryEncounteredContent(RequestorAccountId, CharacterId, ContentTypes);
+
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.send({
         code: null,
         message: "OK",
         payload: {
-            content_types: Content,
+            content_types: ContentResult.data,
             success: true
         }
     });
@@ -55,7 +79,13 @@ progressionRouter.post("/encountered-content/:characterId", HasUndauntedMetagame
 
     logger.info(`Adding encountered content ${ContentId} for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
-    await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId);
+    const ContentResult = await AddEncounteredContent(RequestorAccountId, CharacterId, ContentType, ContentId);
+
+    if(!ContentResult.success){
+        res.status(StatusForProgressionError(ContentResult.error));
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.send({
@@ -84,13 +114,19 @@ progressionRouter.get("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, asy
 
     logger.info(`Requested breadcrumbs for characterId ${RequestedCharacterId}`);
 
-    const Payload = await GetBreadcrumbsForCharacterIdAndUserId(RequestedCharacterId, RequestorUserId);
+    const BreadcrumbsResult = await GetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId);
+
+    if(!BreadcrumbsResult.success){
+        res.status(StatusForProgressionError(BreadcrumbsResult.error));
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.json({
         code: null,
         message: "OK",
-        payload: Payload
+        payload: BreadcrumbsResult.data
     });
 });
 
@@ -102,13 +138,19 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
 
     logger.info(`Setting breadcrumbs for characterId ${RequestedCharacterId}`);
 
-    const Payload = await SetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId, BreadcrumbsFromUser, UpdateVersion);
+    const BreadcrumbsResult = await SetBreadcrumbsForCharacterIdAndUserId(RequestorUserId, RequestedCharacterId, BreadcrumbsFromUser, UpdateVersion);
+
+    if(!BreadcrumbsResult.success){
+        res.status(StatusForProgressionError(BreadcrumbsResult.error));
+        res.send();
+        return;
+    }
 
     res.status(200);
     res.json({
         code: null,
         message: "OK",
-        payload: Payload
+        payload: BreadcrumbsResult.data
     });
 });
 
@@ -140,6 +182,62 @@ progressionRouter.get("/progression/:userId", HasUndauntedMetagameAuth, (req: an
             {
                 phx_account_id: RequestorAccountId,
                 progression_id: "MasteryTrack_PlayerLevel",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Behemoth",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_Strikers",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_Hammer",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_Repeaters",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_ChainBlades",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_Axe",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "MasteryTrack_Weapon_Sword",
                 progress: 9999,
                 confirmed_fremium_rank: 99,
                 confirmed_premium_rank: 99,
