@@ -23,7 +23,7 @@ let MatchmakingQueueMap: Map<string, MatchmakingQueueData> = new Map<string, Mat
 let MatchmakingResultMap: Map<string, MatchmakingResult> = new Map<string, MatchmakingResult>(); // Key is PlayerID
 
 function HuntIdRequiresMatchmaking(HuntId: string){
-    return HuntId.includes("CR19");
+    return HuntId.includes("CR19") || HuntId.includes("11A");
 }
 
 async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined){

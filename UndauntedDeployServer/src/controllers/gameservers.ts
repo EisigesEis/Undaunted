@@ -183,10 +183,23 @@ function GetMapPathFromMatchmakerHuntId(MatchmakerHuntId: string): string{
     return MapList[crypto.randomInt(0, MapList.length)].MapAssetName.split(".")[0];
 }
 
+function GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId: string): string{
+    const MatchmakerHuntObject = (MatchmakerHuntTable[0].Rows as any)[MatchmakerHuntId];
+
+    return MatchmakerHuntObject.GameModeOverride.replaceAll("Archon/Content", "/Game");
+}
+
 export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, ExpectedPlayers: string[]){
     const MatchmakerHuntId = GetMatchmakerHuntIdFromPlayerHuntId(HuntId);
     const BehemothPath = GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId);
-    const MapPath = GetMapPathFromMatchmakerHuntId(MatchmakerHuntId);
+    let MapPath = GetMapPathFromMatchmakerHuntId(MatchmakerHuntId);
+
+    const OverrideGameMode = GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId);
+
+    if(OverrideGameMode != undefined && OverrideGameMode.includes("_C")){
+        logger.info(`Overriding gamemode to ${OverrideGameMode}`);
+        MapPath = `${MapPath}?game=${OverrideGameMode}`;
+    }
 
     const GameServerToReturn = await StartServer(MapPath, BehemothPath, MatchmakerHuntId, ExpectedPlayers.map((PlayerId) => {
         return {
