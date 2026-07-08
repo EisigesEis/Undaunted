@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron';
-import path from 'node:path';
+import path, { relative } from 'node:path';
 import started from 'electron-squirrel-startup';
 import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, promises, readdirSync, readFileSync, rm, rmSync, statfs, statfsSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -324,7 +324,7 @@ async function ValidateUndauntedUserApiKey(ApiKey: string){
   return Ret;
 }
 
-async function HasEnoughFreeSpace(InstallPath: string){
+function HasEnoughFreeSpace(InstallPath: string){
   const Stats = statfsSync(InstallPath, {
     bigint: true
   });
@@ -411,7 +411,19 @@ async function DownloadAndInstallUndaunted(){
   for await (const Entry of TempZipFile.eachEntry()){
     const EntryFileName = Entry.fileName;
 
+    const BaseInstallDir = path.resolve(InstallLocation);
+
     const Destination = path.resolve(InstallLocation, EntryFileName);
+
+    const RelativePath = path.relative(BaseInstallDir, Destination);
+
+    if(RelativePath === "" || RelativePath.startsWith("..") || path.isAbsolute(RelativePath)){
+      TempZipFile.close();
+
+      rmSync(TempFile);
+
+      return false;
+    }
 
     console.log(Destination);
 
