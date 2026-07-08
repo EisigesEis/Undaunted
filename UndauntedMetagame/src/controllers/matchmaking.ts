@@ -121,7 +121,17 @@ async function QueuePlayer(HuntId: string, PlayerId: string){
         CurrentMMEntry!.LastPlayerAddedTime = new Date();
 
         if(CurrentMMEntry!.Players.length >= 4){
+            MatchmakingResultMap.set(PlayerId, {
+                Ready: false,
+                CandidateId: crypto.randomUUID(),
+                HuntId: HuntId,
+                Host: "",
+                Port: 0
+            });
+
             await PopQueue(HuntId);
+
+            return true;
         }
     }
     else if(MatchmakingQueueMap.get(HuntId) != undefined){
