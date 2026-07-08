@@ -29,7 +29,7 @@ systemRouter.post("/heartbeat", HasUndauntedMetagameAuth, async (req: any, res) 
 
 	await UpdatePlayerActivity(UserId, UserMap);
 
-    res.status(200).type("text/plain").send("60");
+    res.status(200).type("text/plain").send("20000");
 });
 
 systemRouter.post("/event", (req, res) => {
@@ -111,11 +111,11 @@ systemRouter.get("/escalation/:escalationSeason/:userId", HasUndauntedMetagameAu
 		code: null,
 		message: "OK",
 		payload: {
-        	escalation_level: 0,
-        	next_level_xp: 0,
+        	escalation_level: 99999,
+        	next_level_xp: 99999,
         	talents_progress: [],
         	unlock_progress: [],
-        	update_version: 0,
+        	update_version: 1,
       	}
 	});
 });

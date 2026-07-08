@@ -104,7 +104,97 @@ progressionRouter.get("/progression/objectives/:userId", HasUndauntedMetagameAut
     res.json({
         code: null,
         message: "OK",
-        payload: []
+        payload: {
+            objectives: [
+                
+            ],
+            progress_tracks: [
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_PlayerLevel",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Behemoth",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_Strikers",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_Hammer",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_Repeaters",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_ChainBlades",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_Axe",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                },
+                {
+                    phx_account_id: RequestorAccountId,
+                    progression_id: "MasteryTrack_Weapon_Sword",
+                    progress: 9999,
+                    confirmed_fremium_rank: 99,
+                    confirmed_premium_rank: 99,
+                    confirmed_date: new Date().toISOString(),
+                }
+            ]
+        }
+    })
+});
+
+progressionRouter.get("/progression/objectives/:userId/:objectiveId", HasUndauntedMetagameAuth, (req: any, res) => {
+    const RequestorAccountId = req.AuthData.userId;
+
+    logger.info(`Objective progression fetched for userId ${RequestorAccountId}`);
+    
+    res.status(200);
+    res.json({
+        code: null,
+        message: "OK",
+        payload: {
+            phx_account_id: req.params.userId,
+            objective_id: req.params.objectiveId,
+            progress: 0,
+            completed_count: 0,
+            created_date: new Date("1970-1-1").toISOString(),
+            last_modified_date: new Date("1970-1-1").toISOString(),
+        }
     })
 });
 
@@ -155,7 +245,7 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
 });
 
 progressionRouter.post("/progression/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-    const RequestorAccountId = req.AuthData.userId;
+    const RequestorAccountId = req.params.userId;
     
     logger.info(`Progression set for userId ${RequestorAccountId} (stubbed)`);
     
@@ -179,6 +269,14 @@ progressionRouter.get("/progression/:userId", HasUndauntedMetagameAuth, (req: an
         code: null,
         message: "OK",
         payload: [
+            {
+                phx_account_id: RequestorAccountId,
+                progression_id: "season09b",
+                progress: 9999,
+                confirmed_fremium_rank: 99,
+                confirmed_premium_rank: 99,
+                confirmed_date: new Date().toISOString(),
+            },
             {
                 phx_account_id: RequestorAccountId,
                 progression_id: "MasteryTrack_PlayerLevel",
