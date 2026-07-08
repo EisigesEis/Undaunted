@@ -1,116 +1,253 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { GetDb } from "../db";
 import { inventory } from "../db/schema";
-import { GetCharacterWithUid } from "./character";
 import { logger } from "../logger";
+import { DoesCharacterBelongToUserId } from "./character";
 
-async function DoesInventoryBelongToUserId(UserId: string, CharacterId: string){
-    const CharacterFromDb = await GetCharacterWithUid(CharacterId, UserId);
+export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_data" | "db_error";
+export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
 
-    return CharacterFromDb != undefined;
-}
-
-export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string, UpdateVersion: number){
-    const Inventory = await GetInventoryForUserIdAndCharacterId(UserId, CharacterId);
-
-    if(Inventory == undefined){
-        return undefined;
-    }
-
-    const InstancedItems = Inventory!.instancedItems;
-
-    for(const Item of InstancedItems){
-        if(Item.catalogId === CatalogId && Item.instanceId == InstanceId){
-            Item.itemData = ItemData;
-            Item.updateVersion = UpdateVersion;
-
-            logger.info(`Updating Instanced Item ${CatalogId} for CharacterId ${CharacterId} and UserId ${UserId}`);
-
-            await GetDb().update(inventory).set({
-                instancedItems: JSON.stringify(InstancedItems)
-            }).where(eq(inventory.characterId, CharacterId));
-
-            return Item;
-        }
+class InventoryConflictError extends Error {
+    constructor(message: string){
+        super(message);
+        this.name = "InventoryConflictError";
     }
 }
 
-export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]){
-    if(!await DoesInventoryBelongToUserId(UserId, CharacterId)){
-        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
-        return false;
-    }
-    // TODO: Rewrites full JSON blobs, losing concurrent updates. Can consider versioning or DB transactions.
-    let CurrentInventory = await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
-
-    if(CurrentInventory == undefined){
-        logger.info(`Creating inventory for characterId ${CharacterId}`)
-
-        CurrentInventory = {
-            characterId: CharacterId,
-            stackedItems: "[]",
-            instancedItems: "[]"
-        };
-
-        await GetDb().insert(inventory).values(CurrentInventory);
-    }
-
-    // TODO: Large inventories may need normalized item rows instead of raw blob stringify
-    let InstancedItems: any[] = JSON.parse(CurrentInventory!.instancedItems);
-
-    let StackedItems: any[] = JSON.parse(CurrentInventory!.stackedItems);
-
-    for(let NewInstancedItem of InstancedItemsToAdd){
-        InstancedItems.push(NewInstancedItem);
-    }
-
-    const StackedItemsByCatalogId = new Map<string, any>();
-
-    for(let StackedItem of StackedItems){
-        StackedItemsByCatalogId.set(StackedItem.catalogId, StackedItem);
-    }
-
-    for(let NewStackedItem of StackedItemsToAdd){
-        const ExistingStackedItem = StackedItemsByCatalogId.get(NewStackedItem.catalogId);
-
-        if(ExistingStackedItem != undefined){
-            ExistingStackedItem.quantity = ExistingStackedItem.quantity + NewStackedItem.quantity;
-        }
-        else{
-            StackedItems.push(NewStackedItem);
-            StackedItemsByCatalogId.set(NewStackedItem.catalogId, NewStackedItem);
-        }
-    }
-
-    // TODO: Consume removals & save
-
-    await GetDb().update(inventory).set({stackedItems: JSON.stringify(StackedItems), instancedItems: JSON.stringify(InstancedItems)}).where(eq(inventory.characterId, CharacterId));
-
-    return true;
-}
-
-export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string){
-    if(!await DoesInventoryBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
-        return undefined;
-    }
-
-    let InventoryFromDb = await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
-
-    if(InventoryFromDb == undefined){
-        logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
-
-        InventoryFromDb = {
-            characterId: CharacterId,
-            instancedItems: "[]",
-            stackedItems: "[]",
-        };
-
-        await GetDb().insert(inventory).values(InventoryFromDb);
-    }
-
+function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInsert {
     return {
         characterId: CharacterId,
-        instancedItems: JSON.parse(InventoryFromDb!.instancedItems),
-        stackedItems: JSON.parse(InventoryFromDb!.stackedItems)
+        instancedItems: "[]",
+        stackedItems: "[]",
     };
+}
+
+function FindInstancedItemIndex(InstancedItems: any[], InstanceId: string){
+    return InstancedItems.findIndex((Item) => Item.instanceId === InstanceId);
+}
+
+function AssertSuperiorInstancedItemVersion(CurrentItem: any, IncomingItem: any, Operation: string){
+    if(typeof CurrentItem.updateVersion !== "number"){
+        return;
+    }
+
+    if(typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion){
+        throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
+    }
+}
+
+export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string, UpdateVersion: number): Promise<InventoryResult<any>>{
+    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
+        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+        return {success: false, error: "forbidden"};
+    }
+
+    try{
+        return GetDb().transaction((tx) => {
+            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+
+            if(CurrentInventory == undefined){
+                logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
+
+                CurrentInventory = MakeEmptyInventoryRow(CharacterId);
+
+                tx.insert(inventory).values(CurrentInventory).run();
+            }
+
+            const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+
+            for(const Item of InstancedItems){
+                if(Item.catalogId === CatalogId && Item.instanceId == InstanceId){
+                    AssertSuperiorInstancedItemVersion(Item, {catalogId: CatalogId, instanceId: InstanceId, updateVersion: UpdateVersion}, "update");
+
+                    Item.itemData = ItemData;
+                    Item.updateVersion = UpdateVersion;
+
+                    logger.info(`Updating Instanced Item ${CatalogId} for CharacterId ${CharacterId} and UserId ${UserId}`);
+
+                    tx.update(inventory).set({
+                        instancedItems: JSON.stringify(InstancedItems)
+                    }).where(eq(inventory.characterId, CharacterId)).run();
+
+                    return {success: true, data: Item} as InventoryResult<any>;
+                }
+            }
+
+            return {success: false, error: "not_found"} as InventoryResult<any>;
+        });
+    }
+    catch(error){
+        if(error instanceof InventoryConflictError){
+            logger.warn(error.message);
+            return {success: false, error: "conflict"};
+        }
+
+        if(error instanceof SyntaxError){
+            logger.error(error, `Invalid inventory data while updating instanced item ${CatalogId} for characterId ${CharacterId} and userId ${UserId}`);
+            return {success: false, error: "invalid_inventory_data"};
+        }
+
+        logger.error(error, `Failed to update instanced item ${CatalogId} for characterId ${CharacterId} and userId ${UserId}`);
+        return {success: false, error: "db_error"};
+    }
+}
+
+export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult>{
+    InstancedItemsToAdd ??= [];
+    StackedItemsToAdd ??= [];
+    InstancedItemsToRemove ??= [];
+    StackedItemsToRemove ??= [];
+    InstancedItemsToSave ??= [];
+
+    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
+        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+        return {success: false, error: "forbidden"};
+    }
+
+    const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToRemove.length > 0 || InstancedItemsToSave.length > 0;
+    const ShouldTouchStackedItems = StackedItemsToAdd.length > 0 || StackedItemsToRemove.length > 0;
+
+    if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
+        return {success: true};
+    }
+
+    try{
+        GetDb().transaction((tx) => {
+            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+
+            if(CurrentInventory == undefined){
+                logger.info(`Creating inventory for characterId ${CharacterId}`)
+
+                CurrentInventory = MakeEmptyInventoryRow(CharacterId);
+
+                tx.insert(inventory).values(CurrentInventory).run();
+            }
+
+            const Update: Partial<typeof inventory.$inferInsert> = {};
+
+            if(ShouldTouchInstancedItems){
+                const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+
+                for(const ItemToRemove of InstancedItemsToRemove){
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
+
+                    if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToRemove, "remove");
+                        InstancedItems.splice(ItemIndex, 1);
+                    }
+                }
+
+                for(const ItemToSave of InstancedItemsToSave){
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
+
+                    if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToSave, "save");
+                        InstancedItems[ItemIndex] = ItemToSave;
+                    }
+                    else{
+                        InstancedItems.push(ItemToSave);
+                    }
+                }
+
+                for(const ItemToAdd of InstancedItemsToAdd){
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
+
+                    if(ItemIndex >= 0){
+                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToAdd, "add");
+                        InstancedItems[ItemIndex] = ItemToAdd;
+                    }
+                    else{
+                        InstancedItems.push(ItemToAdd);
+                    }
+                }
+
+                Update.instancedItems = JSON.stringify(InstancedItems);
+            }
+
+            if(ShouldTouchStackedItems){
+                const StackedItems: any[] = JSON.parse(CurrentInventory.stackedItems);
+
+                for(const ItemToRemove of StackedItemsToRemove){
+                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
+
+                    if(ItemIndex < 0){
+                        continue;
+                    }
+
+                    StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
+
+                    if(StackedItems[ItemIndex].quantity <= 0){
+                        StackedItems.splice(ItemIndex, 1);
+                    }
+                }
+
+                for(const ItemToAdd of StackedItemsToAdd){
+                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToAdd.catalogId);
+
+                    if(ItemIndex >= 0){
+                        StackedItems[ItemIndex].quantity += ItemToAdd.quantity;
+                    }
+                    else{
+                        StackedItems.push(ItemToAdd);
+                    }
+                }
+
+                Update.stackedItems = JSON.stringify(StackedItems);
+            }
+
+            tx.update(inventory).set(Update).where(eq(inventory.characterId, CharacterId)).run();
+        });
+    }
+    catch(error){
+        if(error instanceof InventoryConflictError){
+            logger.warn(error.message);
+            return {success: false, error: "conflict"};
+        }
+
+        if(error instanceof SyntaxError){
+            logger.error(error, `Invalid inventory data while running transaction ${TransactionId} for characterId ${CharacterId} and userId ${UserId}`);
+            return {success: false, error: "invalid_inventory_data"};
+        }
+
+        logger.error(error, `Failed to run inventory transaction ${TransactionId} for characterId ${CharacterId} and userId ${UserId}`);
+        return {success: false, error: "db_error"};
+    }
+
+    return {success: true};
+}
+
+export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string): Promise<InventoryResult<{characterId: string, instancedItems: any[], stackedItems: any[]}>>{
+    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
+        return {success: false, error: "forbidden"};
+    }
+
+    try{
+        let InventoryFromDb = await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+
+        if(InventoryFromDb == undefined){
+            logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
+
+            InventoryFromDb = MakeEmptyInventoryRow(CharacterId);
+
+            await GetDb().insert(inventory).values(InventoryFromDb);
+        }
+
+        return {
+            success: true,
+            data: {
+                characterId: CharacterId,
+                instancedItems: JSON.parse(InventoryFromDb!.instancedItems),
+                stackedItems: JSON.parse(InventoryFromDb!.stackedItems)
+            }
+        };
+    }
+    catch(error){
+        if(error instanceof SyntaxError){
+            logger.error(error, `Invalid inventory data while fetching inventory for characterId ${CharacterId} and userId ${UserId}`);
+            return {success: false, error: "invalid_inventory_data"};
+        }
+
+        logger.error(error, `Failed to fetch inventory for characterId ${CharacterId} and userId ${UserId}`);
+        return {success: false, error: "db_error"};
+    }
 }
