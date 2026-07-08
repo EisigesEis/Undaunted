@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, promises, readdirSync, readFileSync, rm, rmSync, statfs, statfsSync, writeFileSync } from 'node:fs';
@@ -20,6 +20,8 @@ const METAGAME_BASE_URL = MAIN_WINDOW_VITE_DEV_SERVER_URL ? "127.0.0.1:60000" : 
 if (started) {
   app.quit();
 }
+
+nativeTheme.themeSource = "dark"; // Force dark mode to fixup launcher rendering issues
 
 let MainWindow: BrowserWindow;
 
