@@ -13,6 +13,8 @@ function StatusForInventoryError(Error: InventoryError){
             return 404;
         case "conflict":
             return 409;
+        case "invalid_inventory_item":
+            return 400;
         case "invalid_inventory_data":
         case "db_error":
             return 500;

@@ -4,13 +4,20 @@ import { inventory } from "../db/schema";
 import { logger } from "../logger";
 import { DoesCharacterBelongToUserId } from "./character";
 
-export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_data" | "db_error";
+export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_item" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
 
 class InventoryConflictError extends Error {
     constructor(message: string){
         super(message);
         this.name = "InventoryConflictError";
+    }
+}
+
+class InventoryValidationError extends Error {
+    constructor(message: string){
+        super(message);
+        this.name = "InventoryValidationError";
     }
 }
 
@@ -26,17 +33,42 @@ function FindInstancedItemIndex(InstancedItems: any[], InstanceId: string){
     return InstancedItems.findIndex((Item) => Item.instanceId === InstanceId);
 }
 
-function AssertSuperiorInstancedItemVersion(CurrentItem: any, IncomingItem: any, Operation: string){
+function HasStatelessItemData(Item: any){
+    return !Object.prototype.hasOwnProperty.call(Item, "itemData") || Item.itemData == null;
+}
+
+function IsAllowedStaleStatelessReplacement(CurrentItem: any, IncomingItem: any, Operation: string){
+    return Operation !== "remove"
+        && HasStatelessItemData(CurrentItem)
+        && HasStatelessItemData(IncomingItem)
+        && CurrentItem.updateVersion === 0;
+}
+
+function AssertValidIncomingInstancedItem(IncomingItem: any, Operation: string){
+    if(HasStatelessItemData(IncomingItem) && IncomingItem.updateVersion !== 0){
+        throw new InventoryValidationError(`Refusing stateless instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: expected updateVersion 0, got ${IncomingItem.updateVersion}`);
+    }
+}
+
+function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, Operation: string){
+    if(Operation !== "remove"){
+        AssertValidIncomingInstancedItem(IncomingItem, Operation);
+    }
+
     if(typeof CurrentItem.updateVersion !== "number"){
         return;
     }
 
     if(typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion){
+        if(IsAllowedStaleStatelessReplacement(CurrentItem, IncomingItem, Operation)){
+            return;
+        }
+
         throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
     }
 }
 
-export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string, UpdateVersion: number): Promise<InventoryResult<any>>{
+export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string | null | undefined, UpdateVersion: number): Promise<InventoryResult<any>>{
     if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
         logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
         return {success: false, error: "forbidden"};
@@ -58,7 +90,9 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
 
             for(const Item of InstancedItems){
                 if(Item.catalogId === CatalogId && Item.instanceId == InstanceId){
-                    AssertSuperiorInstancedItemVersion(Item, {catalogId: CatalogId, instanceId: InstanceId, updateVersion: UpdateVersion}, "update");
+                    const IncomingItem = {catalogId: CatalogId, instanceId: InstanceId, itemData: ItemData, updateVersion: UpdateVersion};
+
+                    AssertExistingInstancedItemWrite(Item, IncomingItem, "update");
 
                     Item.itemData = ItemData;
                     Item.updateVersion = UpdateVersion;
@@ -80,6 +114,11 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
         if(error instanceof InventoryConflictError){
             logger.warn(error.message);
             return {success: false, error: "conflict"};
+        }
+
+        if(error instanceof InventoryValidationError){
+            logger.warn(error.message);
+            return {success: false, error: "invalid_inventory_item"};
         }
 
         if(error instanceof SyntaxError){
@@ -132,7 +171,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
 
                     if(ItemIndex >= 0){
-                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToRemove, "remove");
+                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
                         InstancedItems.splice(ItemIndex, 1);
                     }
                 }
@@ -141,10 +180,11 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
 
                     if(ItemIndex >= 0){
-                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToSave, "save");
+                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToSave, "save");
                         InstancedItems[ItemIndex] = ItemToSave;
                     }
                     else{
+                        AssertValidIncomingInstancedItem(ItemToSave, "save");
                         InstancedItems.push(ItemToSave);
                     }
                 }
@@ -153,10 +193,11 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
 
                     if(ItemIndex >= 0){
-                        AssertSuperiorInstancedItemVersion(InstancedItems[ItemIndex], ItemToAdd, "add");
+                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToAdd, "add");
                         InstancedItems[ItemIndex] = ItemToAdd;
                     }
                     else{
+                        AssertValidIncomingInstancedItem(ItemToAdd, "add");
                         InstancedItems.push(ItemToAdd);
                     }
                 }
@@ -202,6 +243,11 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         if(error instanceof InventoryConflictError){
             logger.warn(error.message);
             return {success: false, error: "conflict"};
+        }
+
+        if(error instanceof InventoryValidationError){
+            logger.warn(error.message);
+            return {success: false, error: "invalid_inventory_item"};
         }
 
         if(error instanceof SyntaxError){
