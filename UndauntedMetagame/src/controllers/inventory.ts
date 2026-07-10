@@ -50,22 +50,25 @@ function AssertValidIncomingInstancedItem(IncomingItem: any, Operation: string){
     }
 }
 
-function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, Operation: string){
+function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, Operation: string): "write" | "skip"{
     if(Operation !== "remove"){
         AssertValidIncomingInstancedItem(IncomingItem, Operation);
     }
 
     if(typeof CurrentItem.updateVersion !== "number"){
-        return;
+        return "write";
     }
 
-    if(typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion){
-        if(IsAllowedStaleStatelessReplacement(CurrentItem, IncomingItem, Operation)){
-            return;
-        }
+    if(IsAllowedStaleStatelessReplacement(CurrentItem, IncomingItem, Operation)){
+        return "skip";
+    }
 
+    const IsStaleInstancedItem = typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion;
+    if(IsStaleInstancedItem){
         throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
     }
+
+    return "write";
 }
 
 export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string | null | undefined, UpdateVersion: number): Promise<InventoryResult<any>>{
@@ -87,27 +90,30 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
             }
 
             const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+            const ItemIndex = InstancedItems.findIndex((Item) => Item.catalogId === CatalogId && Item.instanceId === InstanceId);
 
-            for(const Item of InstancedItems){
-                if(Item.catalogId === CatalogId && Item.instanceId == InstanceId){
-                    const IncomingItem = {catalogId: CatalogId, instanceId: InstanceId, itemData: ItemData, updateVersion: UpdateVersion};
-
-                    AssertExistingInstancedItemWrite(Item, IncomingItem, "update");
-
-                    Item.itemData = ItemData;
-                    Item.updateVersion = UpdateVersion;
-
-                    logger.info(`Updating Instanced Item ${CatalogId} for CharacterId ${CharacterId} and UserId ${UserId}`);
-
-                    tx.update(inventory).set({
-                        instancedItems: JSON.stringify(InstancedItems)
-                    }).where(eq(inventory.characterId, CharacterId)).run();
-
-                    return {success: true, data: Item} as InventoryResult<any>;
-                }
+            if(ItemIndex < 0){
+                return {success: false, error: "not_found"} as InventoryResult<any>;
             }
 
-            return {success: false, error: "not_found"} as InventoryResult<any>;
+            const Item = InstancedItems[ItemIndex];
+            const IncomingItem = {catalogId: CatalogId, instanceId: InstanceId, itemData: ItemData, updateVersion: UpdateVersion};
+
+            if(AssertExistingInstancedItemWrite(Item, IncomingItem, "update") === "skip"){
+                logger.info(`Skipping stale stateless Instanced Item ${CatalogId} for CharacterId ${CharacterId} and UserId ${UserId}`);
+                return {success: true, data: Item} as InventoryResult<any>;
+            }
+
+            Item.itemData = ItemData;
+            Item.updateVersion = UpdateVersion;
+
+            logger.info(`Updating Instanced Item ${CatalogId} for CharacterId ${CharacterId} and UserId ${UserId}`);
+
+            tx.update(inventory).set({
+                instancedItems: JSON.stringify(InstancedItems)
+            }).where(eq(inventory.characterId, CharacterId)).run();
+
+            return {success: true, data: Item} as InventoryResult<any>;
         });
     }
     catch(error){
@@ -166,6 +172,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
 
             if(ShouldTouchInstancedItems){
                 const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+                let DidUpdateInstancedItems = false;
 
                 for(const ItemToRemove of InstancedItemsToRemove){
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
@@ -173,6 +180,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     if(ItemIndex >= 0){
                         AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
                         InstancedItems.splice(ItemIndex, 1);
+                        DidUpdateInstancedItems = true;
                     }
                 }
 
@@ -180,12 +188,17 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
 
                     if(ItemIndex >= 0){
-                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToSave, "save");
+                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToSave, "save") === "skip"){
+                            continue;
+                        }
+
                         InstancedItems[ItemIndex] = ItemToSave;
+                        DidUpdateInstancedItems = true;
                     }
                     else{
                         AssertValidIncomingInstancedItem(ItemToSave, "save");
                         InstancedItems.push(ItemToSave);
+                        DidUpdateInstancedItems = true;
                     }
                 }
 
@@ -193,16 +206,23 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
 
                     if(ItemIndex >= 0){
-                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToAdd, "add");
+                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToAdd, "add") === "skip"){
+                            continue;
+                        }
+
                         InstancedItems[ItemIndex] = ItemToAdd;
+                        DidUpdateInstancedItems = true;
                     }
                     else{
                         AssertValidIncomingInstancedItem(ItemToAdd, "add");
                         InstancedItems.push(ItemToAdd);
+                        DidUpdateInstancedItems = true;
                     }
                 }
 
-                Update.instancedItems = JSON.stringify(InstancedItems);
+                if(DidUpdateInstancedItems){
+                    Update.instancedItems = JSON.stringify(InstancedItems);
+                }
             }
 
             if(ShouldTouchStackedItems){
@@ -236,7 +256,9 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                 Update.stackedItems = JSON.stringify(StackedItems);
             }
 
-            tx.update(inventory).set(Update).where(eq(inventory.characterId, CharacterId)).run();
+            if(Object.keys(Update).length > 0){
+                tx.update(inventory).set(Update).where(eq(inventory.characterId, CharacterId)).run();
+            }
         });
     }
     catch(error){
