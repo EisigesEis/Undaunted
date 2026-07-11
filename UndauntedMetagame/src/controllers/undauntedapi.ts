@@ -44,6 +44,15 @@ export async function GetInviteCodes(){
     return await GetDb().query.invitecodes.findMany();
 }
 
+export async function GetAllUserIds(){
+    const UsersFromDb = await GetDb().query.users.findMany();
+
+    return UsersFromDb.map((user) => {
+        Username: user.name;
+        UserId: user.userId;
+    });
+}
+
 export async function RegisterInviteCode(NewInviteCode: string, Uses: number, InfiniteUses: boolean){
     if(NewInviteCode.trim().length > 0){
         await GetDb().insert(invitecodes).values({

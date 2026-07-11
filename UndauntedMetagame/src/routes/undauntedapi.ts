@@ -1,7 +1,8 @@
 import { Router } from "express";
-import { DeleteInviteCode, GetInviteCodes, GetRecentPlayerData, GetUserInfoForApiKey, RegisterInviteCode, RegisterUser, REGISTRATION_MODE, SetRegistrationMode, UserInfo, ValidateAndConsumeInviteCode } from "../controllers/undauntedapi";
+import { DeleteInviteCode, GetAllUserIds, GetInviteCodes, GetRecentPlayerData, GetUserInfoForApiKey, RegisterInviteCode, RegisterUser, REGISTRATION_MODE, SetRegistrationMode, UserInfo, ValidateAndConsumeInviteCode } from "../controllers/undauntedapi";
 import { HasUndauntedUserApiKey } from "../middleware/HasUndauntedUserApiKey";
 import { HasUndauntedAdminApiKey } from "../middleware/HasUndauntedAdminApiKey";
+import { SignMetagameJWTForUid } from "../controllers/auth";
 
 export const undauntedApiRouter = Router();
 
@@ -29,6 +30,26 @@ undauntedApiRouter.get("/InviteCodes", HasUndauntedAdminApiKey, async (req, res)
         InviteCodes: InviteCodes
     });
 });
+
+undauntedApiRouter.post("/GenerateJWTForUserId", HasUndauntedAdminApiKey, async (req, res) => {
+    const UserId = req.body.UserId;
+
+    const JWT = await SignMetagameJWTForUid(UserId);
+
+    res.status(200);
+    res.send({
+        JWT: JWT
+    });
+});
+
+undauntedApiRouter.get("/GetAllUsers", HasUndauntedAdminApiKey, async (req, res) => {
+    const AllUsers = await GetAllUserIds();
+
+    res.status(200);
+    res.send({
+        Users: AllUsers
+    });
+})
 
 undauntedApiRouter.post("/RegisterInviteCode", HasUndauntedAdminApiKey, async (req, res) => {    
     const NewInviteCode = req.body.NewInviteCode;
