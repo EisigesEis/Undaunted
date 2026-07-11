@@ -1,11 +1,10 @@
-import { boolean } from "drizzle-orm/gel-core";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
     userId: text("userId").notNull().primaryKey(),
     name: text("name").notNull(),
     notes: integer("notes").notNull(),
-    isAdmin: boolean("isAdmin").notNull().default(0)
+    isAdmin: integer("isAdmin", {mode: "boolean"}).notNull().default(false)
 })
 
 export const characters = sqliteTable("characters", {
@@ -66,5 +65,5 @@ export const encounteredcontent = sqliteTable("encounteredcontent", {
 export const invitecodes = sqliteTable("invitecodes", {
     inviteCode: text("invitecode").notNull().primaryKey(),
     usesRemaining: integer("usesRemaining").notNull(),
-    infiniteUses: boolean("infiniteUses").notNull()
+    infiniteUses: integer("infiniteUses", {mode: "boolean"}).notNull()
 });

@@ -33,7 +33,7 @@ undauntedApiRouter.get("/InviteCodes", HasUndauntedAdminApiKey, async (req, res)
 undauntedApiRouter.post("/RegisterInviteCode", HasUndauntedAdminApiKey, async (req, res) => {    
     const NewInviteCode = req.body.NewInviteCode;
     const Uses = req.body.Uses;
-    const InfiniteUses = req.body.InfiniteUses ? 1 : 0;
+    const InfiniteUses = !!req.body.InfiniteUses;
 
     await RegisterInviteCode(NewInviteCode, Uses, InfiniteUses);
 
