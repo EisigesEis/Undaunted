@@ -92,12 +92,14 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
     }
 }
 
-export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult>{
+export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult<any[]>>{
     InstancedItemsToAdd ??= [];
     StackedItemsToAdd ??= [];
     InstancedItemsToRemove ??= [];
     StackedItemsToRemove ??= [];
     InstancedItemsToSave ??= [];
+
+    let TouchedStackedItems: any[] = []; // TODO: Clean this up if this ends up working
 
     if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
         logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
@@ -186,8 +188,10 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
 
                     if(ItemIndex >= 0){
                         StackedItems[ItemIndex].quantity += ItemToAdd.quantity;
+                        TouchedStackedItems.push(StackedItems[ItemIndex]);
                     }
                     else{
+                        TouchedStackedItems.push(ItemToAdd);
                         StackedItems.push(ItemToAdd);
                     }
                 }
@@ -213,7 +217,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         return {success: false, error: "db_error"};
     }
 
-    return {success: true};
+    return {success: true, data: TouchedStackedItems};
 }
 
 export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string): Promise<InventoryResult<{characterId: string, instancedItems: any[], stackedItems: any[]}>>{

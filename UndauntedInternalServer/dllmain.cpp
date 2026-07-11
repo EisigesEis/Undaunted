@@ -330,17 +330,11 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
             if (!Obj)
                 continue;
 
-            if (Obj->IsDefaultObject())
-                continue;
-
-            if (Obj->IsA(SDK::AArchonPlayerController::StaticClass()))
+            if (Obj->IsA(SDK::UArenaMapHuntsFeature::StaticClass()))
             {
-                AArchonPlayerController* Quest = (AArchonPlayerController*)Obj;
+                UArenaMapHuntsFeature* Quest = (UArenaMapHuntsFeature*)Obj;
                 
-                UArchonCheatManager* CheatMan = (UArchonCheatManager*)UGameplayStatics::SpawnObject(UArchonCheatManager::StaticClass(), Quest);
-
-                Quest->CheatManager = CheatMan;
-                Quest->EnableCheats();
+                std::cout << Quest->bEnabled << std::endl;
             }
         }
 
@@ -547,17 +541,11 @@ void ProcessEventClientHook(UObject* Object, UFunction* Function, void* Parms) {
             if (!Obj)
                 continue;
 
-            if (Obj->IsDefaultObject())
-                continue;
-
-            if (Obj->IsA(SDK::AArchonPlayerController::StaticClass()))
+            if (Obj->IsA(SDK::UArenaMapHuntsFeature::StaticClass()))
             {
-                AArchonPlayerController* Quest = (AArchonPlayerController*)Obj;
-                
-                UArchonCheatManager* CheatMan = (UArchonCheatManager*)UGameplayStatics::SpawnObject(UArchonCheatManager::StaticClass(), Quest);
+                UArenaMapHuntsFeature* Quest = (UArenaMapHuntsFeature*)Obj;
 
-                Quest->CheatManager = CheatMan;
-                Quest->EnableCheats();
+                std::cout << Quest->bEnabled << std::endl;
             }
         }
 
@@ -659,6 +647,28 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
     return reinterpret_cast<bool(*)(void* a1, const wchar_t* Section, const wchar_t* Key, FString * Value, FString * Filename)>(OrigConfigCacheIniGetString)(a1, Section, Key, Value, Filename);
 }
 
+void* OrigGetEscalationSeason = nullptr;
+
+bool GetEscalationSeason(UHuntCatalog* a1, FString* HuntID, FHunt_UnlockInfo* UnlockInfo, FHunt_UnlockInfo* AltUnlockInfo, AArchonPlayerController* PC) { // TODO: Fixup scheduling & Player leveling so this hack isn't necessary
+    if (HuntID->ToString().contains("Arena") || (HuntID->ToString().contains("Esca") && !HuntID->ToString().contains("Mint"))) {
+        return true;
+    }
+
+    return reinterpret_cast<bool(*)(UHuntCatalog * a1, FString * HuntID, FHunt_UnlockInfo * UnlockInfo, FHunt_UnlockInfo * AltUnlockInfo, AArchonPlayerController * PC)>(OrigGetEscalationSeason)(a1, HuntID, UnlockInfo, AltUnlockInfo, PC);
+}
+
+void* OrigGetTrackProgress = nullptr;
+
+__int64 GetTrackProgress(void* a1, FName* a2, void* a3) {
+    if (a2) {
+        std::cout << a2->ToString() << std::endl;
+    }
+
+    return 9999999;
+}
+
+//__int64 *__fastcall sub_141428060(__int64 a1, __int64 *a2, unsigned __int8 a3, char a4)
+
 void InitClientHooks() {
     MH_Initialize();
 
@@ -669,6 +679,12 @@ void InitClientHooks() {
     MH_CreateHook((void*)(Globals::BaseAddress + 0x1D09D50), ConfigCacheInitGetStringHook, &OrigConfigCacheIniGetString);
 
     MH_EnableHook((void*)(Globals::BaseAddress + 0x1D09D50));
+
+    MH_CreateHook((void*)(Globals::BaseAddress + 0x14F2A30), GetEscalationSeason, &OrigGetEscalationSeason);
+
+    MH_EnableHook((void*)(Globals::BaseAddress + 0x14F2A30));
+
+    //
 
     //1469E00
 
@@ -787,9 +803,12 @@ void InitServerHooks() {
 
     //MH_CreateHook((void*)(Globals::BaseAddress + 0x1469E00), GetTrackProgress, &OrigGetTrackProgress);
 
-    //MH_EnableHook((void*)(Globals::BaseAddress + 0x1469E00));
+   // MH_EnableHook((void*)(Globals::BaseAddress + 0x1469E00));
 
     
+    MH_CreateHook((void*)(Globals::BaseAddress + 0x14F2A30), GetEscalationSeason, &OrigGetEscalationSeason);
+
+    MH_EnableHook((void*)(Globals::BaseAddress + 0x14F2A30));
 
     //
 

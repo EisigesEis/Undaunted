@@ -5,11 +5,14 @@ import crypto from "node:crypto";
 
 import PlayerHuntTable from "../vendor/player_hunts_table.json";
 import MatchmakerHuntTable from "../vendor/matchmaker_hunts_table.json";
+import TrialsHardHuntTable from "../vendor/trials_hard_table.json";
+import TrialsEliteHuntTable from "../vendor/trials_elite_table.json";
 import { kill } from "node:process";
 import { logger } from "../logger";
 
 const RAMSGATE_MAP_PATH = "/Game/Maps/ramsgate/ramsgate_01_persistent";
 const TRAINING_DOJO_MAP_PATH = "/Game/Maps/islands/dojo/training_dojo_persistent";
+const TRIALS_MAP_PATH = "/Game/Maps/islands/arenas/arena_ramsgate_00";
 
 export type Gameserver = {
     id: string,
@@ -161,12 +164,16 @@ export async function StartupGameserverWithArgs(GameArgs: string){
     };
 }
 
-function GetMatchmakerHuntIdFromPlayerHuntId(PlayerHuntId: string): string{
+function GetMatchmakerHuntIdFromPlayerHuntId(PlayerHuntId: string){
     const MatchmakerHuntIDs = (PlayerHuntTable[0].Rows as any)[PlayerHuntId].MatchmakerHuntIDs;
 
-    const MatchmakerHuntObject = MatchmakerHuntIDs[crypto.randomInt(0, MatchmakerHuntIDs.length)];
+    let MatchmakerHuntObject;
 
-    return MatchmakerHuntObject.RowName;
+    if(MatchmakerHuntIDs.length !== 0){
+        MatchmakerHuntObject = MatchmakerHuntIDs[crypto.randomInt(0, MatchmakerHuntIDs.length)];
+    }
+
+    return MatchmakerHuntObject?.RowName;
 }
 
 function GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId: string): string{
@@ -189,16 +196,41 @@ function GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId: string): stri
     return MatchmakerHuntObject.GameModeOverride.replaceAll("Archon/Content", "/Game");
 }
 
+type TrialsData = {
+    Behemoth: string;
+    TrialsHuntId: string;
+}
+
+function RandomlyGenTrialsData(IsElite: boolean): TrialsData{
+    const RandomTrialNum = String(crypto.randomInt(1, 89)).padStart(3, "0");
+
+    const Difficulty = IsElite ? "Elite" : "Hard";
+
+    const TrialsHuntId = `Arena_MatchmakerHunt_${Difficulty}_${RandomTrialNum}`;
+
+    const Row = IsElite ? (TrialsEliteHuntTable[0].Rows as any)[TrialsHuntId] : (TrialsHardHuntTable[0].Rows as any)[TrialsHuntId];
+
+    const Behemoth = Row.SpecificBehemoth.BehemothAsset.AssetPathName;
+
+    return {
+        Behemoth: Behemoth,
+        TrialsHuntId: TrialsHuntId
+    };
+}
+
 export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, ExpectedPlayers: string[]){
-    const MatchmakerHuntId = GetMatchmakerHuntIdFromPlayerHuntId(HuntId);
-    const BehemothPath = GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId);
-    let MapPath = GetMapPathFromMatchmakerHuntId(MatchmakerHuntId);
+    const TrialsData = HuntId.includes("Arena") ? RandomlyGenTrialsData(HuntId.includes("Elite")) : undefined;
+    const MatchmakerHuntId = TrialsData == undefined ? GetMatchmakerHuntIdFromPlayerHuntId(HuntId) : TrialsData.TrialsHuntId;
+    let BehemothPath = TrialsData == undefined ? GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId!) : TrialsData.Behemoth;
+    let MapPath = TrialsData == undefined ? GetMapPathFromMatchmakerHuntId(MatchmakerHuntId!) : TRIALS_MAP_PATH;
 
-    const OverrideGameMode = GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId);
+    if(MatchmakerHuntId != undefined && !MatchmakerHuntId.includes("Arena")){
+        const OverrideGameMode = GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId);
 
-    if(OverrideGameMode != undefined && OverrideGameMode.includes("_C")){
-        logger.info(`Overriding gamemode to ${OverrideGameMode}`);
-        MapPath = `${MapPath}?game=${OverrideGameMode}`;
+        if(OverrideGameMode != undefined && OverrideGameMode.includes("_C")){
+            logger.info(`Overriding gamemode to ${OverrideGameMode}`);
+            MapPath = `${MapPath}?game=${OverrideGameMode}`;
+        }
     }
 
     const GameServerToReturn = await StartServer(MapPath, BehemothPath, MatchmakerHuntId, ExpectedPlayers.map((PlayerId) => {
