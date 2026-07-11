@@ -1,8 +1,8 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { GetDb } from "../db";
 import { GetUserIDForAPIKey, HashUserAPIKey } from "./auth";
 import { invitecodes, userapikeys, users } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, gt, or, sql } from "drizzle-orm";
 
 const AUTH_MODE = process.env.AUTH_MODE;
 const NODE_ENV = process.env.NODE_ENV;
@@ -115,29 +115,30 @@ export async function RegisterUser(Username: string){
     return UUK;
 }
 
-export async function ValidateAndConsumeInviteCode(InviteCode: unknown){ // TODO: Might have some TOCTOU, review when not sleepy
+export async function ValidateAndConsumeInviteCode(InviteCode: unknown){
     if(typeof InviteCode !== "string" || InviteCode.length === 0){
         return false;
     }
 
-    const InviteCodes: any[] = await GetDb().query.invitecodes.findMany();
-
-    for(const CmpInviteCode of InviteCodes){
-        if(CmpInviteCode.inviteCode.length === InviteCode.length && timingSafeEqual(Buffer.from(CmpInviteCode.inviteCode), Buffer.from(InviteCode))){
-            if(CmpInviteCode.usesRemaining > 0 || CmpInviteCode.infiniteUses){
-                if(!CmpInviteCode.infiniteUses){
-                    await GetDb().update(invitecodes).set({usesRemaining: CmpInviteCode.usesRemaining - 1}).where(eq(invitecodes.inviteCode, InviteCode));
-                }
-
-                return true;
-            }
-            else{
-                return false;
-            }
-        }
+    const NormalizedInviteCode = InviteCode.trim();
+    if(NormalizedInviteCode.length === 0){
+        return false;
     }
 
-    return false;
+    // Avoid TOCTOU by decrement in DB statement
+    const UsableInviteCode = await GetDb().update(invitecodes).set({
+        usesRemaining: sql`case when ${invitecodes.infiniteUses} then ${invitecodes.usesRemaining} else ${invitecodes.usesRemaining} - 1 end`
+    }).where(and(
+        eq(invitecodes.inviteCode, NormalizedInviteCode),
+        or(
+            eq(invitecodes.infiniteUses, true),
+            gt(invitecodes.usesRemaining, 0)
+        )
+    )).returning({
+        inviteCode: invitecodes.inviteCode
+    });
+
+    return UsableInviteCode.length === 1;
 }
 
 export async function UpdatePlayerActivity(UserId: string, Map: string){
