@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { logger } from "../logger";
 import { HandleMatchmakingRequest } from "../controllers/matchmaker";
-import { TouchGameserverForPlayer } from "../controllers/gameservers";
+import { GetGameserverStatusForPlayer, TouchGameserverForPlayer } from "../controllers/gameservers";
 import express from "express";
 
 export const matchmakingRouter = Router();
@@ -50,4 +50,20 @@ matchmakingRouter.post("/touch-player", express.json(), (req, res) => {
         touched: true,
         server: TouchedServer
     });
+});
+
+matchmakingRouter.post("/player-server-status", express.json(), async (req, res) => {
+    const PlayerId = req.body.PlayerId;
+
+    if(typeof PlayerId !== "string" || PlayerId.length === 0){
+        res.status(400);
+        res.json({
+            found: false,
+            joinable: false
+        });
+        return;
+    }
+
+    res.status(200);
+    res.json(await GetGameserverStatusForPlayer(PlayerId));
 });

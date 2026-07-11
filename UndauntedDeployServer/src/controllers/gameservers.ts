@@ -43,9 +43,10 @@ export type GameserverOrigin = "RAMSGATE_PREWARM" | "TRAINING_DOJO_PREWARM" | "T
 export let Gameservers: Gameserver[] = [];
 let FreePorts: number[] = [];
 
-let RamsgateServer : Gameserver;
+let RamsgateServer : Gameserver | undefined;
 let TrainingDojoServer : Gameserver | undefined;
 let TrainingDojoStartup: Promise<Gameserver> | undefined;
+let RamsgateRestart: Promise<void> | undefined;
 
 const PORT_RANGE_BEGIN = Number(process.env.PORT_RANGE_BEGIN!);
 const PORT_RANGE_END = Number(process.env.PORT_RANGE_END!);
@@ -57,9 +58,38 @@ const METAGAME_API_KEY = process.env.METAGAME_API_KEY!;
 const MY_IP = process.env.MY_IP!;
 const SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP = Number(process.env.SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP!);
 const GAMESERVER_STARTUP_TIMEOUT_SECONDS = Number(process.env.GAMESERVER_STARTUP_TIMEOUT_SECONDS || "60");
+const RAMSGATE_RESTART_RETRY_SECONDS = Number(process.env.RAMSGATE_RESTART_RETRY_SECONDS || "5");
 const PREWARM_TRAINING_DOJO = process.env.PREWARM_TRAINING_DOJO === "true";
 const TRAINING_DOJO_IDLE_SHUTDOWN_SECONDS = Number(process.env.TRAINING_DOJO_IDLE_SHUTDOWN_SECONDS || "300");
 const HUNT_IDLE_SHUTDOWN_SECONDS = Number(process.env.HUNT_IDLE_SHUTDOWN_SECONDS || "90");
+const ESCALATION_IDLE_SHUTDOWN_SECONDS = ParseOptionalPositiveSeconds(process.env.ESCALATION_IDLE_SHUTDOWN_SECONDS);
+
+function ParseOptionalPositiveSeconds(Value: string | undefined){
+    if(Value == undefined || Value.trim().length === 0){
+        return undefined;
+    }
+
+    const ParsedValue = Number(Value);
+
+    if(!Number.isFinite(ParsedValue) || ParsedValue <= 0){
+        return undefined;
+    }
+
+    return ParsedValue;
+}
+
+function IsEscalationServer(HuntId: string | undefined, MatchmakerHuntId: string | undefined, MapPath: string | undefined){
+    return [HuntId, MatchmakerHuntId, MapPath]
+        .some((Value) => Value?.toLowerCase().includes("escalation"));
+}
+
+function GetHuntIdleShutdownSeconds(HuntId: string | undefined, MatchmakerHuntId: string | undefined, MapPath: string | undefined){
+    if(IsEscalationServer(HuntId, MatchmakerHuntId, MapPath)){
+        return ESCALATION_IDLE_SHUTDOWN_SECONDS;
+    }
+
+    return HUNT_IDLE_SHUTDOWN_SECONDS;
+}
 
 async function IsUdpPortInUse(Port: number){
     return await new Promise<boolean>((resolve) => {
@@ -88,6 +118,16 @@ async function IsUdpPortInUse(Port: number){
         Socket.once("listening", () => Finish(false));
         Socket.bind(Port, "0.0.0.0");
     });
+}
+
+function IsGameserverProcessAlive(GameserverToCheck: Gameserver){
+    try{
+        kill(GameserverToCheck.processId, 0);
+        return true;
+    }
+    catch{
+        return false;
+    }
 }
 
 function GetUdpPortOwnerPid(Port: number){
@@ -175,22 +215,22 @@ function TransformExpectedPlayerArgs(ExpectedPlayers: ExpectedPlayer[]){
 }
 
 export async function CleanupServer(ServerToShutdown: Gameserver){
+    const WasTracked = Gameservers.includes(ServerToShutdown);
     Gameservers = Gameservers.filter(Server => Server !== ServerToShutdown);
 
-    if(ServerToShutdown.isRamsgate){
-        logger.warn("RAMSGATE HAS FALLEN! Restarting!");
+    if(!WasTracked && RamsgateServer !== ServerToShutdown && TrainingDojoServer !== ServerToShutdown){
+        logger.warn(`Skipping cleanup for already removed gameserver ${ServerToShutdown.processId} on port ${ServerToShutdown.port}`);
+        return;
+    }
 
-        RamsgateServer = await StartServer({
-            map: RAMSGATE_MAP_PATH,
-            behemoth: undefined,
-            matchmakerHuntId: undefined,
-            expectedPlayers: undefined,
-            isRamsgate: true,
-            isTrainingDojo: false,
-            origin: "RAMSGATE_PREWARM",
-            trigger: "watchdog_restart",
-            shutdownAfterSeconds: undefined
-        });
+    if(ServerToShutdown.isRamsgate){
+        logger.warn("RAMSGATE HAS FALLEN! Scheduling restart!");
+
+        if(RamsgateServer === ServerToShutdown){
+            RamsgateServer = undefined;
+        }
+
+        ScheduleRamsgateRestart("watchdog_restart");
     }
     else if(ServerToShutdown.isTrainingDojo){
         logger.warn("Training Dojo cleaned up; it will lazy-start on the next request");
@@ -204,6 +244,32 @@ export async function CleanupServer(ServerToShutdown: Gameserver){
     else{
         FreePorts.push(ServerToShutdown.port);
     }
+}
+
+async function CleanupFailedStartup(NewGameserver: Gameserver, Options: StartServerOptions){
+    NewGameserver.expectedShutdownReason = "startup_failed";
+
+    Gameservers = Gameservers.filter(Server => Server !== NewGameserver);
+
+    if(Options.isRamsgate){
+        if(RamsgateServer === NewGameserver){
+            RamsgateServer = undefined;
+        }
+
+        ScheduleRamsgateRestart("startup_retry");
+        return;
+    }
+
+    if(Options.isTrainingDojo){
+        if(TrainingDojoServer === NewGameserver){
+            TrainingDojoServer = undefined;
+        }
+
+        TrainingDojoStartup = undefined;
+        return;
+    }
+
+    FreePorts.push(NewGameserver.port);
 }
 
 export async function ShutdownServer(ServerToShutdown: Gameserver, Reason: string){
@@ -288,6 +354,7 @@ async function StartServer(Options: StartServerOptions){
         MY_IP + ":" + Port.toString(),
         ...STANDARD_GAMESERVER_ARGS
     ], {
+        detached: true,
         stdio: "ignore"
     });
 
@@ -295,6 +362,7 @@ async function StartServer(Options: StartServerOptions){
     Child.on("error", (Error) => {
         logger.error(Error, `Gameserver process failed to start for port ${Port}`);
     });
+    let StartupCompleted = false;
     const NewGameserver: Gameserver = {
         id: Id,
         port: Port,
@@ -322,6 +390,14 @@ async function StartServer(Options: StartServerOptions){
         }
 
         logger.warn(ExitMessage);
+
+        if(!StartupCompleted){
+            return;
+        }
+
+        void CleanupServer(NewGameserver).catch((Error) => {
+            logger.error(Error, `Failed to cleanup gameserver ${Child.pid ?? "unknown"} on port ${Port} after unexpected exit`);
+        });
     });
 
     Gameservers.push(NewGameserver);
@@ -330,22 +406,61 @@ async function StartServer(Options: StartServerOptions){
         await WaitForGameserverReady(Child, Port);
     }
     catch(Error){
-        Gameservers = Gameservers.filter(Server => Server !== NewGameserver);
-
-        if(!Options.isRamsgate && !Options.isTrainingDojo){
-            FreePorts.push(Port);
-        }
-
+        await CleanupFailedStartup(NewGameserver, Options);
         throw Error;
     }
+
+    StartupCompleted = true;
 
     logger.info(`Gameserver ${Child.pid} is ready on ${MY_IP}:${Port} origin=${Options.origin} trigger=${Options.trigger} map=${Options.map}`);
 
     return NewGameserver;
 }
 
+async function StartRamsgateServer(Trigger: string){
+    return await StartServer({
+        map: RAMSGATE_MAP_PATH,
+        behemoth: undefined,
+        matchmakerHuntId: undefined,
+        expectedPlayers: undefined,
+        isRamsgate: true,
+        isTrainingDojo: false,
+        origin: "RAMSGATE_PREWARM",
+        trigger: Trigger,
+        shutdownAfterSeconds: undefined
+    });
+}
+
+function ScheduleRamsgateRestart(Trigger: string){
+    if(RamsgateRestart != undefined){
+        logger.warn(`Ramsgate restart already in progress; ignoring duplicate trigger ${Trigger}`);
+        return;
+    }
+
+    RamsgateRestart = (async () => {
+        while(RamsgateServer == undefined){
+            try{
+                RamsgateServer = await StartRamsgateServer(Trigger);
+                logger.info(`Ramsgate restarted on ${MY_IP}:${RamsgateServer.port}`);
+                return;
+            }
+            catch(Error){
+                logger.error(Error, `Failed to restart Ramsgate; retrying in ${RAMSGATE_RESTART_RETRY_SECONDS}s`);
+                await setTimeout(RAMSGATE_RESTART_RETRY_SECONDS * 1000);
+            }
+        }
+    })().finally(() => {
+        RamsgateRestart = undefined;
+    });
+}
+
 export function GetRamsgateConnectionDetails(){
+    if(RamsgateServer == undefined){
+        throw new Error("Ramsgate server has not started");
+    }
+
     return {
+        id: RamsgateServer.id,
         host: MY_IP,
         port: RamsgateServer.port
     };
@@ -359,13 +474,50 @@ export function GetTrainingDojoConnectionDetails(){
     TrainingDojoServer.lastTouchedTime = new Date();
 
     return {
+        id: TrainingDojoServer.id,
         host: MY_IP,
         port: TrainingDojoServer.port
     };
 }
 
+function FindGameserverForPlayer(PlayerId: string){
+    return Gameservers.find((Candidate) => Candidate.expectedPlayers?.some((Player) => Player.playerUid === PlayerId));
+}
+
+export async function GetGameserverStatusForPlayer(PlayerId: string){
+    const Server = FindGameserverForPlayer(PlayerId);
+
+    if(Server == undefined){
+        return {
+            found: false,
+            joinable: false
+        };
+    }
+
+    const ProcessAlive = IsGameserverProcessAlive(Server);
+    const PortBound = await IsUdpPortInUse(Server.port);
+    const Joinable = ProcessAlive && PortBound && Server.expectedShutdownReason == undefined;
+
+    return {
+        found: true,
+        joinable: Joinable,
+        server: {
+            host: MY_IP,
+            port: Server.port,
+            id: Server.id,
+            origin: Server.origin,
+            map: Server.map,
+            matchmakerHuntId: Server.matchmakerHuntId,
+            expectedPlayers: Server.expectedPlayers,
+            processAlive: ProcessAlive,
+            portBound: PortBound,
+            lastTouchedTime: Server.lastTouchedTime.toISOString()
+        }
+    };
+}
+
 export function TouchGameserverForPlayer(PlayerId: string){
-    const Server = Gameservers.find((Candidate) => Candidate.expectedPlayers?.some((Player) => Player.playerUid === PlayerId));
+    const Server = FindGameserverForPlayer(PlayerId);
 
     if(Server == undefined){
         return undefined;
@@ -410,6 +562,7 @@ export async function GetOrStartTrainingDojoConnectionDetails(Origin: Gameserver
     Server.lastTouchedTime = new Date();
 
     return {
+        id: Server.id,
         host: MY_IP,
         port: Server.port
     };
@@ -425,6 +578,7 @@ function TransformExpectedPlayers(HuntId: string | undefined, ExpectedPlayers: s
 export async function StartupGameserverWithArgs(GameArgs: string, ExpectedPlayers: string[] | undefined){
     const Map = GameArgs.split("?")[0];
     const Behemoth = GameArgs.split("?")[2].split("=")[1];
+    const ShutdownAfterSeconds = GetHuntIdleShutdownSeconds(undefined, undefined, GameArgs);
 
     const GameServerToReturn = await StartServer({
         map: Map,
@@ -435,10 +589,11 @@ export async function StartupGameserverWithArgs(GameArgs: string, ExpectedPlayer
         isTrainingDojo: false,
         origin: "HUNT_ARGS",
         trigger: GameArgs,
-        shutdownAfterSeconds: HUNT_IDLE_SHUTDOWN_SECONDS
+        shutdownAfterSeconds: ShutdownAfterSeconds
     });
 
     return {
+        id: GameServerToReturn.id,
         host: MY_IP,
         port: GameServerToReturn.port
     };
@@ -522,10 +677,11 @@ export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, Expe
         isTrainingDojo: false,
         origin: "HUNT_MATCHMAKER",
         trigger: HuntId,
-        shutdownAfterSeconds: HUNT_IDLE_SHUTDOWN_SECONDS
+        shutdownAfterSeconds: GetHuntIdleShutdownSeconds(HuntId, MatchmakerHuntId, MapPath)
     });
 
     return {
+        id: GameServerToReturn.id,
         host: MY_IP,
         port: GameServerToReturn.port
     }
@@ -536,17 +692,7 @@ export async function Startup(){
         FreePorts.push(i);
     }
 
-    RamsgateServer = await StartServer({
-        map: RAMSGATE_MAP_PATH,
-        behemoth: undefined,
-        matchmakerHuntId: undefined,
-        expectedPlayers: undefined,
-        isRamsgate: true,
-        isTrainingDojo: false,
-        origin: "RAMSGATE_PREWARM",
-        trigger: "deploy_startup",
-        shutdownAfterSeconds: undefined
-    });
+    RamsgateServer = await StartRamsgateServer("deploy_startup");
 
     if(PREWARM_TRAINING_DOJO){
         await GetOrStartTrainingDojoConnectionDetails("TRAINING_DOJO_PREWARM");

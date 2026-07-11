@@ -18,7 +18,7 @@ function IsGameserverStillAlive(GameserverToCheck: Gameserver){
 }
 
 export async function RunWatchdog(){
-    logger.info(`Running Gameserver Watchdog!`);
+    // logger.info(`Running Gameserver Watchdog!`);
 
     for(const Gameserver of [...Gameservers]){
         if(!IsGameserverStillAlive(Gameserver)){
