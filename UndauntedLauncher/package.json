@@ -1,7 +1,7 @@
 {
   "name": "undauntedlauncher",
   "productName": "Undaunted Launcher",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A Launcher for the Undaunted Project",
   "main": ".vite/build/main.js",
   "private": true,
