@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
-import { GetAllLoadoutsForUserIdAndCharacterId, GetPersistentLoadoutForUserIdAndCharacterId, SetLoadoutDataForUserIdAndCharacterId } from "../controllers/loadout";
+import { GetLoadoutSetForUserIdAndCharacterId, SetLoadoutDataForUserIdAndCharacterId } from "../controllers/loadout";
 import { logger } from "../logger";
 
 export const loadoutRouter = Router();
@@ -9,18 +9,17 @@ loadoutRouter.get("/loadout/:userId/:characterId/all", HasUndauntedMetagameAuth,
     const RequestorAccountId = req.AuthData.IsGameserver ? req.params.userId : req.AuthData.userId;
     const CharacterId = req.params.characterId;
 
-    const Loadouts: any[] = await GetAllLoadoutsForUserIdAndCharacterId(RequestorAccountId, CharacterId);
-    const Persistent: any = await GetPersistentLoadoutForUserIdAndCharacterId(RequestorAccountId, CharacterId); // TODO: WARN: Ordering of this and the GetAllLoadoutsForUserIdAndCharacterId MUST NOT CHANGE until create-on-nonexistent is added in the loadout controller
+    const LoadoutSet = await GetLoadoutSetForUserIdAndCharacterId(RequestorAccountId, CharacterId);
 
-    logger.info(`Fetched ${Loadouts.length} loadout(s) for userId ${RequestorAccountId} and characterId ${CharacterId}`);
+    logger.info(`Fetched ${LoadoutSet.loadouts.length} loadout(s) for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
     res.status(200);
     res.json({
         code: null,
         message: "OK",
         payload: {
-            loadouts: Loadouts,
-            persistent: Persistent,
+            loadouts: LoadoutSet.loadouts,
+            persistent: LoadoutSet.persistent,
             num_account_slots: 1, // TODO: Make these loadout slots add-able, support multiple loadouts
             max_account_slots: 1,
             num_character_slots: 1,
@@ -43,18 +42,17 @@ loadoutRouter.post("/loadout/:userId/:characterId/:index", HasUndauntedMetagameA
         logger.info(`Successfully updated loadout index ${Index} for userId ${RequestorAccountId} and characterId ${CharacterId}`);
         // TODO: RE success shape, below is a complete guess
 
-        const Loadouts: any[] = await GetAllLoadoutsForUserIdAndCharacterId(RequestorAccountId, CharacterId);
-        const Persistent: any = await GetPersistentLoadoutForUserIdAndCharacterId(RequestorAccountId, CharacterId); // TODO: WARN: Ordering of this and the GetAllLoadoutsForUserIdAndCharacterId MUST NOT CHANGE until create-on-nonexistent is added in the loadout controller
+        const LoadoutSet = await GetLoadoutSetForUserIdAndCharacterId(RequestorAccountId, CharacterId);
 
-        logger.info(`Fetched ${Loadouts.length} loadout(s) for userId ${RequestorAccountId} and characterId ${CharacterId}`);
+        logger.info(`Fetched ${LoadoutSet.loadouts.length} loadout(s) for userId ${RequestorAccountId} and characterId ${CharacterId}`);
 
         res.status(200);
         res.json({
             code: null,
             message: "OK",
             payload: {
-                loadouts: Loadouts,
-                persistent: Persistent,
+                loadouts: LoadoutSet.loadouts,
+                persistent: LoadoutSet.persistent,
                 num_account_slots: 1, // TODO: Make these loadout slots add-able, support multiple loadouts
                 max_account_slots: 1,
                 num_character_slots: 1,

@@ -176,15 +176,15 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                 const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
                 let DidUpdateInstancedItems = false;
 
-                for(const ItemToRemove of InstancedItemsToRemove){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
+                // for(const ItemToRemove of InstancedItemsToRemove){
+                //     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
 
-                    if(ItemIndex >= 0){
-                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
-                        InstancedItems.splice(ItemIndex, 1);
-                        DidUpdateInstancedItems = true;
-                    }
-                }
+                //     if(ItemIndex >= 0){
+                //         AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
+                //         InstancedItems.splice(ItemIndex, 1);
+                //         DidUpdateInstancedItems = true;
+                //     }
+                // }
 
                 for(const ItemToSave of InstancedItemsToSave){
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
@@ -230,19 +230,19 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             if(ShouldTouchStackedItems){
                 const StackedItems: any[] = JSON.parse(CurrentInventory.stackedItems);
 
-                for(const ItemToRemove of StackedItemsToRemove){
-                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
+                // for(const ItemToRemove of StackedItemsToRemove){
+                //     const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
 
-                    if(ItemIndex < 0){
-                        continue;
-                    }
+                //     if(ItemIndex < 0){
+                //         continue;
+                //     }
 
-                    StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
+                //     StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
 
-                    if(StackedItems[ItemIndex].quantity <= 0){
-                        StackedItems.splice(ItemIndex, 1);
-                    }
-                }
+                //     if(StackedItems[ItemIndex].quantity <= 0){
+                //         StackedItems.splice(ItemIndex, 1);
+                //     }
+                // }
 
                 for(const ItemToAdd of StackedItemsToAdd){
                     const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToAdd.catalogId);

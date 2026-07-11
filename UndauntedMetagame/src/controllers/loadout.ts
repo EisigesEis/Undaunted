@@ -47,9 +47,13 @@ const DEFAULT_PERSISTENT = {
 };
 
 export async function GetAllLoadoutsForUserIdAndCharacterId(UserId: string, CharacterId: string){
-    let LoadoutDbRow = await GetDb().query.loadouts.findFirst({where: and(eq(loadouts.characterId, CharacterId), eq(loadouts.userId, UserId))});
+    const LoadoutSet = await GetLoadoutSetForUserIdAndCharacterId(UserId, CharacterId);
 
-    let Loadouts;
+    return LoadoutSet.loadouts;
+}
+
+export async function GetLoadoutSetForUserIdAndCharacterId(UserId: string, CharacterId: string){
+    let LoadoutDbRow = await GetDb().query.loadouts.findFirst({where: and(eq(loadouts.characterId, CharacterId), eq(loadouts.userId, UserId))});
 
     if(LoadoutDbRow == undefined){
         logger.info(`Creating new loadout set for userId ${UserId} and characterId ${CharacterId}`);
@@ -101,29 +105,31 @@ export async function GetAllLoadoutsForUserIdAndCharacterId(UserId: string, Char
         };
 
         const NewLoadoutData = [NewLoadoutSlot];
+        const NewPersistentData = DEFAULT_PERSISTENT;
 
         await GetDb().insert(loadouts).values({
             characterId: CharacterId,
             userId: UserId,
             loadouts: JSON.stringify(NewLoadoutData),
-            persistent: JSON.stringify(DEFAULT_PERSISTENT)
+            persistent: JSON.stringify(NewPersistentData)
         });
 
-        Loadouts = NewLoadoutData;
-    }
-    else{
-        Loadouts = JSON.parse(LoadoutDbRow.loadouts);
+        return {
+            loadouts: NewLoadoutData,
+            persistent: NewPersistentData
+        };
     }
 
-    return Loadouts;
+    return {
+        loadouts: JSON.parse(LoadoutDbRow.loadouts),
+        persistent: JSON.parse(LoadoutDbRow.persistent)
+    };
 }
 
 export async function GetPersistentLoadoutForUserIdAndCharacterId(UserId: string, CharacterId: string){
-    // TODO: This will break if it's not called AFTER the GetAllLoadouts call as it has no create-on-nonexistent functionality
+    const LoadoutSet = await GetLoadoutSetForUserIdAndCharacterId(UserId, CharacterId);
 
-    const LoadoutDbRow = await GetDb().query.loadouts.findFirst({where: and(eq(loadouts.characterId, CharacterId), eq(loadouts.userId, UserId))});
-
-    return JSON.parse(LoadoutDbRow!.persistent);
+    return LoadoutSet.persistent;
 }
 
 export async function SetLoadoutDataForUserIdAndCharacterId(UserId: string, CharacterId: string, Index: string, Data: string){

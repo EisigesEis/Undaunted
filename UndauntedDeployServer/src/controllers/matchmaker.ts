@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { GetRamsgateConnectionDetails, GetTrainingDojoConnectionDetails, StartupGameserverWithArgs, StartupGameserverWithHuntIdAndPlayers } from "./gameservers";
+import { GetOrStartTrainingDojoConnectionDetails, GetRamsgateConnectionDetails, StartupGameserverWithArgs, StartupGameserverWithHuntIdAndPlayers } from "./gameservers";
 
 export async function HandleMatchmakingRequest(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined){
     logger.info(`Handling matchmaking with GameMode: ${GameMode} HuntId: ${HuntId} and GameArgs: ${GameArgs} and ExpectedPlayers ${ExpectedPlayers}`);
@@ -10,13 +10,13 @@ export async function HandleMatchmakingRequest(GameMode: string, GameArgs: strin
     else if(GameMode === "SHARED"){
         if (HuntId != undefined && HuntId.trim().length > 0){
             if(HuntId == "ShatteredIsles_TrainingDojo"){
-                return GetTrainingDojoConnectionDetails();
+                return await GetOrStartTrainingDojoConnectionDetails("TRAINING_DOJO_LAZY");
             }
         }
     }
     else if(GameMode === "ISLAND"){
         if(GameArgs != undefined && GameArgs.trim().length > 0){
-            return await StartupGameserverWithArgs(GameArgs);
+            return await StartupGameserverWithArgs(GameArgs, ExpectedPlayers);
         }
 
         if(HuntId != undefined && HuntId.trim().length > 0 && ExpectedPlayers != undefined){

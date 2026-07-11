@@ -4,6 +4,9 @@ import crypto from "node:crypto";
 const MATCHMAKING_MODE = process.env.MATCHMAKING_MODE;
 const DEPLOYSERVER_URL = process.env.DEPLOYSERVER_URL;
 const DEPLOYSERVER_MATCHMAKING_PATH = "/api/matchmaker/handle-matchmaking-for-player";
+const DEPLOYSERVER_TOUCH_PLAYER_PATH = "/api/matchmaker/touch-player";
+const DEPLOYSERVER_TOUCH_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_TOUCH_TIMEOUT_MS || "1000");
+const MATCHMAKING_QUEUE_WAIT_MS = Number(process.env.MATCHMAKING_QUEUE_WAIT_SECONDS || "3") * 1000;
 
 type MatchmakingQueueData = {
     Players: string[],
@@ -69,6 +72,33 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
     }
 }
 
+export async function TouchDeployserverForPlayerActivity(PlayerId: string){
+    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
+        return false;
+    }
+
+    const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_TOUCH_PLAYER_PATH;
+
+    try{
+        const TouchResult = await fetch(URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                PlayerId: PlayerId
+            }),
+            signal: AbortSignal.timeout(DEPLOYSERVER_TOUCH_TIMEOUT_MS)
+        });
+
+        return TouchResult.status === 200;
+    }
+    catch(Error){
+        logger.warn(Error, `Failed to touch active gameserver for player ${PlayerId}`);
+        return false;
+    }
+}
+
 async function PopQueue(HuntId: string){
     const MatchmakingQueue = MatchmakingQueueMap.get(HuntId);
 
@@ -103,7 +133,7 @@ export async function CheckAndUpdateQueueStatus(PlayerId: string){
     if(!PlayerMatchmakingResult.Ready){
         const MatchmakingQueue = MatchmakingQueueMap.get(PlayerMatchmakingResult.HuntId);
 
-        if((new Date()).getTime() - MatchmakingQueue!.LastPlayerAddedTime.getTime() > 20000){ // 20 sec
+        if((new Date()).getTime() - MatchmakingQueue!.LastPlayerAddedTime.getTime() > MATCHMAKING_QUEUE_WAIT_MS){
             await PopQueue(PlayerMatchmakingResult.HuntId);
         }
     }
@@ -165,7 +195,7 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
     }
     else if(MATCHMAKING_MODE === "DEPLOYSERVER"){
         if(HuntId == undefined || HuntId.trim().length == 0 || !HuntIdRequiresMatchmaking(HuntId)){
-            const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, GameArgs, HuntId, undefined);
+            const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, GameArgs, HuntId, [PlayerId]);
 
             MatchmakingResultMap.set(PlayerId, {
                 Ready: true,

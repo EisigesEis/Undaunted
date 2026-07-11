@@ -1,6 +1,6 @@
 import { kill } from "node:process";
 import { logger } from "../logger";
-import { Gameserver, Gameservers, CleanupServer } from "./gameservers";
+import { Gameserver, Gameservers, CleanupServer, ShutdownServer } from "./gameservers";
 
 /**
  * TODO:
@@ -20,11 +20,21 @@ function IsGameserverStillAlive(GameserverToCheck: Gameserver){
 export async function RunWatchdog(){
     logger.info(`Running Gameserver Watchdog!`);
 
-    for(const Gameserver of Gameservers){
+    for(const Gameserver of [...Gameservers]){
         if(!IsGameserverStillAlive(Gameserver)){
-            console.log(`Cleaning up Gameserver on port ${Gameserver.port}`);
+            logger.info(`Cleaning up dead gameserver on port ${Gameserver.port}`);
 
-            CleanupServer(Gameserver);
+            await CleanupServer(Gameserver);
+
+            continue;
+        }
+
+        if(Gameserver.shutdownAfterSeconds != undefined && Gameserver.shutdownAfterSeconds > 0){
+            const IdleSeconds = (Date.now() - Gameserver.lastTouchedTime.getTime()) / 1000;
+
+            if(IdleSeconds >= Gameserver.shutdownAfterSeconds){
+                await ShutdownServer(Gameserver, `idle for ${Math.floor(IdleSeconds)}s`);
+            }
         }
     }
 }

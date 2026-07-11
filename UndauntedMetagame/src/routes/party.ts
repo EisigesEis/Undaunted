@@ -7,9 +7,9 @@ import { GetUsernameForUserId } from "../controllers/login";
 
 export const partyRouter = Router();
 
-partyRouter.post("/party", HasUndauntedMetagameAuth, (req: any, res) => {
+partyRouter.post("/party", HasUndauntedMetagameAuth, async (req: any, res) => {
     const UserId = req.AuthData.userId;
-    const Username = GetUsernameForUserId(UserId);
+    const Username = await GetUsernameForUserId(UserId);
 
     logger.info("Get Party State (stubbed)");
 

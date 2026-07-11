@@ -1,8 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { GetDb } from "../db";
-import { GetUserIDForAPIKey, HashUserAPIKey } from "./auth";
-import { invitecodes, userapikeys, users } from "../db/schema";
+import { GetUserIDForAPIKey, HashUserAPIKey, RegisterUserAPIKeyHash } from "./auth";
+import { invitecodes, users } from "../db/schema";
 import { and, eq, gt, or, sql } from "drizzle-orm";
+import { RememberUsernameForUserId } from "./login";
 
 const AUTH_MODE = process.env.AUTH_MODE;
 const NODE_ENV = process.env.NODE_ENV;
@@ -107,10 +108,8 @@ export async function RegisterUser(Username: string){
         notes: 0
     });
 
-    await GetDb().insert(userapikeys).values({
-        userId: UID,
-        keyHash: UUKHash
-    });
+    await RegisterUserAPIKeyHash(UID, UUKHash);
+    RememberUsernameForUserId(UID, Username);
 
     return UUK;
 }

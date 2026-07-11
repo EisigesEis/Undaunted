@@ -1,5 +1,6 @@
 import jwt, {JwtPayload} from "jsonwebtoken";
 import crypto from "crypto";
+import { eq } from "drizzle-orm";
 import { GetDb } from "../db";
 import { userapikeys, userapikeystoregister } from "../db/schema";
 import { logger } from "../logger";
@@ -9,6 +10,13 @@ const PUBKEY = Buffer.from(process.env.AUTH_SIGNING_PUBKEY_B64!, "base64").toStr
 
 export function HashUserAPIKey(UserAPIKeyToHash: string){
     return crypto.createHash("sha256").update(UserAPIKeyToHash, "utf8").digest("hex");
+}
+
+export async function RegisterUserAPIKeyHash(userId: string, keyHash: string){
+    await GetDb().insert(userapikeys).values({
+        userId: userId,
+        keyHash: keyHash
+    });
 }
 
 export async function DrainAndRegisterUserAPIKeys(){
@@ -27,25 +35,12 @@ export async function DrainAndRegisterUserAPIKeys(){
 }
 
 export async function GetUserIDForAPIKey(UserAPIKey: string){
-    const AllAPIKeyHashes = await GetDb().query.userapikeys.findMany();
+    const IncomingUserAPIKeyHash = HashUserAPIKey(UserAPIKey);
+    const APIKey = await GetDb().query.userapikeys.findFirst({
+        where: eq(userapikeys.keyHash, IncomingUserAPIKeyHash)
+    });
 
-    const IncomingUserAPIKeyHashBuffer = Buffer.from(HashUserAPIKey(UserAPIKey), "hex");
-
-    let UserId: string | undefined = undefined;
-
-    for(const CmpAPIKeyHash of AllAPIKeyHashes){
-        const CmpAPIKeyHashBuffer = Buffer.from(CmpAPIKeyHash.keyHash!, "hex");
-
-        if(CmpAPIKeyHashBuffer.length !== IncomingUserAPIKeyHashBuffer.length){
-            continue;
-        }
-
-        if(crypto.timingSafeEqual(IncomingUserAPIKeyHashBuffer, CmpAPIKeyHashBuffer)){
-            UserId = CmpAPIKeyHash.userId;
-        }
-    }
-
-    return UserId;
+    return APIKey?.userId;
 }
 
 function SignMetagameJWTForUid(userId: string){

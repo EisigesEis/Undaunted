@@ -7,9 +7,17 @@ export const matchmakingRouter = Router();
 
 const QOS_TARGET_URL = process.env.QOS_TARGET_URL;
 const TARGET_CHANGELIST = process.env.TARGET_CHANGELIST;
+const MATCHMAKING_STATUS_PERIOD_MILLIS = Number(process.env.MATCHMAKING_STATUS_PERIOD_MILLIS || "1000");
 
 matchmakingRouter.post("/candidate/player/register", HasUndauntedMetagameAuth, (req: any, res) => {
     logger.info(`userId ${req.AuthData.userId} is registering for matchmaking!`);
+
+    res.status(200);
+    res.json({});
+});
+
+matchmakingRouter.all("/candidate/player/alive", HasUndauntedMetagameAuth, (req: any, res) => {
+    logger.info(`Player alive check from ${req.AuthData.userId ?? "gameserver"}`);
 
     res.status(200);
     res.json({});
@@ -57,7 +65,7 @@ matchmakingRouter.get("/candidate/status", HasUndauntedMetagameAuth, async (req:
             res.status(200);
             res.json({
                 candidateId: MatchmakingResult.CandidateId,
-                candidateStatusPeriodMillis: 10000,
+                candidateStatusPeriodMillis: MATCHMAKING_STATUS_PERIOD_MILLIS,
                 gameMode: "ISLAND",
                 huntId: MatchmakingResult.HuntId,
                 playerStates: {
@@ -80,7 +88,7 @@ matchmakingRouter.get("/candidate/status", HasUndauntedMetagameAuth, async (req:
             res.status(200);
             res.json({
                 candidateId: MatchmakingResult.CandidateId,
-                candidateStatusPeriodMillis: 10000,
+                candidateStatusPeriodMillis: MATCHMAKING_STATUS_PERIOD_MILLIS,
                 gameMode: "ISLAND",
                 huntId: MatchmakingResult.HuntId,
                 playerStates: {

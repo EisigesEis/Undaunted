@@ -2,6 +2,7 @@ import {GetDb} from "../db"
 import { gameserverapikeys, gameserverapikeystoregister } from "../db/schema";
 import crypto from "crypto";
 import { logger } from "../logger";
+import { eq } from "drizzle-orm";
 
 function HashGameserverAPIKey(GameserverAPIKeyToHash: string){
     return crypto.createHash("sha256").update(GameserverAPIKeyToHash, "utf8").digest("hex");
@@ -22,23 +23,10 @@ export async function DrainAndRegisterAPIKeys(){
 }
 
 export async function IsValidGameserverAPIKey(GameserverAPIKey: string){
-    const AllAPIKeyHashes = await GetDb().query.gameserverapikeys.findMany();
+    const IncomingGameserverAPIKeyHash = HashGameserverAPIKey(GameserverAPIKey);
+    const APIKey = await GetDb().query.gameserverapikeys.findFirst({
+        where: eq(gameserverapikeys.keyHash, IncomingGameserverAPIKeyHash)
+    });
 
-    const IncomingGameserverAPIKeyHashBuffer = Buffer.from(HashGameserverAPIKey(GameserverAPIKey), "hex");
-
-    let Match: boolean = false;
-
-    for(const CmpAPIKeyHash of AllAPIKeyHashes){
-        const CmpAPIKeyHashBuffer = Buffer.from(CmpAPIKeyHash.keyHash!, "hex");
-
-        if(CmpAPIKeyHashBuffer.length !== IncomingGameserverAPIKeyHashBuffer.length){
-            continue;
-        }
-
-        if(crypto.timingSafeEqual(IncomingGameserverAPIKeyHashBuffer, CmpAPIKeyHashBuffer)){
-            Match = true;
-        }
-    }
-
-    return Match;
+    return APIKey != undefined;
 }
