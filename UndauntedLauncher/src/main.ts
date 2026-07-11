@@ -588,6 +588,8 @@ ipcMain.on("DownloadAndInstallUndaunted", async (event) => {
 ipcMain.handle("PlayUndaunted", async (event) => {
   LoadDataFile();
 
+  await PatchUndauntedInstall();
+
   RunUndaunted();
 
   console.log("Launched Undaunted!");
