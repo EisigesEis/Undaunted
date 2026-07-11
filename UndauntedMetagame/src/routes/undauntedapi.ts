@@ -3,6 +3,7 @@ import { DeleteInviteCode, GetAllUserIds, GetInviteCodes, GetRecentPlayerData, I
 import { HasUndauntedUserApiKey } from "../middleware/HasUndauntedUserApiKey";
 import { HasUndauntedAdminApiKey } from "../middleware/HasUndauntedAdminApiKey";
 import { SignMetagameJWTForUid } from "../controllers/auth";
+import { GetMatchmakingDebugData } from "../controllers/matchmaking";
 
 export const undauntedApiRouter = Router();
 
@@ -133,9 +134,14 @@ undauntedApiRouter.get("/GetUserInfo", HasUndauntedUserApiKey, async (req: any, 
 
 undauntedApiRouter.get("/PrivateOnlineStats", HasUndauntedAdminApiKey, async (req, res) => {
     const PlayerData = await GetRecentPlayerData();
+    const MatchmakingData = GetMatchmakingDebugData();
 
     res.status(200);
-    res.json(PlayerData);
+    res.json({
+        ActivePlayers: PlayerData,
+        MatchmakingSessions: MatchmakingData.sessions,
+        MatchmakingQueues: MatchmakingData.queues
+    });
 });
 
 undauntedApiRouter.get("/PublicOnlineStats", HasUndauntedUserApiKey, async (req, res) => {

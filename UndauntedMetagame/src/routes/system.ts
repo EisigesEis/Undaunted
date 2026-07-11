@@ -3,7 +3,7 @@ import { logger } from "../logger";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import progressionconfig from "../vendor/progression_config.json";
 import { UpdatePlayerActivity } from "../controllers/undauntedapi";
-import { TouchDeployserverForPlayerActivity } from "../controllers/matchmaking";
+import { MarkMatchmakingHeartbeat, TouchDeployserverForPlayerActivity } from "../controllers/matchmaking";
 
 export const systemRouter = Router();
 
@@ -29,6 +29,7 @@ systemRouter.post("/heartbeat", HasUndauntedMetagameAuth, async (req: any, res) 
 	const UserMap = req.body.map;
 
 	await UpdatePlayerActivity(UserId, UserMap);
+	await MarkMatchmakingHeartbeat(UserId);
 	await TouchDeployserverForPlayerActivity(UserId);
 
     res.status(200).type("text/plain").send("20000");

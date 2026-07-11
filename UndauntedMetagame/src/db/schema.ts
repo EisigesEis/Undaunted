@@ -48,6 +48,21 @@ export const userapikeys = sqliteTable("userapikeys", {
     };
 });
 
+export const userrefreshtokens = sqliteTable("userrefreshtokens", {
+    id: integer("id").notNull().primaryKey({autoIncrement: true}),
+    userId: text("userId").notNull(),
+    tokenHash: text("tokenHash").notNull(),
+    issuedAt: text("issuedAt").notNull(),
+    expiresAt: text("expiresAt").notNull(),
+    revokedAt: text("revokedAt"),
+    replacedByTokenHash: text("replacedByTokenHash")
+}, (table) => {
+    return {
+        tokenHashIdx: index("userrefreshtokens_tokenHash_idx").on(table.tokenHash),
+        userIdIdx: index("userrefreshtokens_userId_idx").on(table.userId)
+    };
+});
+
 export const userapikeystoregister = sqliteTable("userapikeystoregister", {
     userId: text("userId").notNull().primaryKey(),
     key: text("key").notNull()

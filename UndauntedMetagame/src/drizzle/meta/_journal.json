@@ -71,6 +71,20 @@
       "when": 1783299942758,
       "tag": "0009_nice_dazzler",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1783774483294,
+      "tag": "0010_moaning_vivisector",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1783775659566,
+      "tag": "0011_useful_mattie_franklin",
+      "breakpoints": true
     }
   ]
 }

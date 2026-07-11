@@ -1,12 +1,19 @@
 import { logger } from "../logger";
 import crypto from "node:crypto";
+import { UpdatePlayerLocation, UpdatePlayerMatchmakingActivity } from "./undauntedapi";
 
 const MATCHMAKING_MODE = process.env.MATCHMAKING_MODE;
 const DEPLOYSERVER_URL = process.env.DEPLOYSERVER_URL;
 const DEPLOYSERVER_MATCHMAKING_PATH = "/api/matchmaker/handle-matchmaking-for-player";
 const DEPLOYSERVER_TOUCH_PLAYER_PATH = "/api/matchmaker/touch-player";
+const DEPLOYSERVER_STATUS_PATH = "/api/matchmaker/player-server-status";
 const DEPLOYSERVER_TOUCH_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_TOUCH_TIMEOUT_MS || "1000");
+const DEPLOYSERVER_STATUS_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_STATUS_TIMEOUT_MS || "1000");
 const MATCHMAKING_QUEUE_WAIT_MS = Number(process.env.MATCHMAKING_QUEUE_WAIT_SECONDS || "3") * 1000;
+const MATCHMAKING_RECONNECT_WINDOW_MS = Number(process.env.MATCHMAKING_RECONNECT_WINDOW_SECONDS || "120") * 1000;
+const MATCHMAKING_SESSION_TTL_MS = Number(process.env.MATCHMAKING_SESSION_TTL_SECONDS || "300") * 1000;
+
+export type MatchmakingPhase = "QUEUED" | "STARTING" | "READY" | "FAILED" | "EXPIRED";
 
 type MatchmakingQueueData = {
     Players: string[],
@@ -14,23 +21,126 @@ type MatchmakingQueueData = {
     Resolved: boolean
 };
 
-type MatchmakingResult = {
-    Ready: boolean,
-    HuntId: string,
-    CandidateId: string,
-    Host: string,
-    Port: number
+export type MatchmakingSession = {
+    candidateId: string,
+    userId: string,
+    gameMode: string,
+    gameArgs: string,
+    huntId: string,
+    host: string,
+    port: number,
+    phase: MatchmakingPhase,
+    statusReason: string | undefined,
+    createdAt: Date,
+    updatedAt: Date,
+    readyAt: Date | undefined,
+    lastHeartbeatAt: Date | undefined,
+    serverId: string | undefined
+};
+
+type LaunchGameResult = {
+    succeeded: boolean,
+    host: string,
+    port: number,
+    serverId: string | undefined,
+    statusReason: string | undefined
+};
+
+type DeployserverPlayerStatus = {
+    found: boolean,
+    joinable: boolean,
+    server?: {
+        host: string,
+        port: number,
+        id: string,
+        lastTouchedTime?: string
+    }
 };
 
 let MatchmakingQueueMap: Map<string, MatchmakingQueueData> = new Map<string, MatchmakingQueueData>(); // Key is HuntID
-let MatchmakingResultMap: Map<string, MatchmakingResult> = new Map<string, MatchmakingResult>(); // Key is PlayerID
+let MatchmakingSessionMap: Map<string, MatchmakingSession> = new Map<string, MatchmakingSession>(); // Key is PlayerID
 
-function HuntIdRequiresMatchmaking(HuntId: string){
-    return !HuntId.includes("Ramsgate") && !HuntId.includes("Dojo");
-    //return HuntId.includes("CR19") || HuntId.includes("11A") || HuntId.includes("Story");
+function HuntIdRequiresMatchmaking(HuntId: string | undefined){
+    return HuntId != undefined && !HuntId.includes("Ramsgate") && !HuntId.includes("Dojo");
 }
 
-async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined){
+function CreateMatchmakingSession(PlayerId: string, GameMode: string, GameArgs: string, HuntId: string, Phase: MatchmakingPhase): MatchmakingSession{
+    const Now = new Date();
+
+    return {
+        candidateId: crypto.randomUUID(),
+        userId: PlayerId,
+        gameMode: GameMode,
+        gameArgs: GameArgs,
+        huntId: HuntId,
+        host: "",
+        port: 0,
+        phase: Phase,
+        statusReason: undefined,
+        createdAt: Now,
+        updatedAt: Now,
+        readyAt: undefined,
+        lastHeartbeatAt: undefined,
+        serverId: undefined
+    };
+}
+
+async function SyncMatchmakingActivity(Session: MatchmakingSession){
+    await UpdatePlayerMatchmakingActivity(Session.userId, {
+        CandidateId: Session.candidateId,
+        GameMode: Session.gameMode,
+        HuntId: Session.huntId,
+        Phase: Session.phase,
+        StatusReason: Session.statusReason,
+        Host: Session.host || undefined,
+        Port: Session.port || undefined,
+        ServerId: Session.serverId,
+        ReadyTime: Session.readyAt?.getTime()
+    });
+
+    if(Session.phase === "READY"){
+        await UpdatePlayerLocation(Session.userId, Session.huntId);
+    }
+}
+
+function MarkSessionUpdated(Session: MatchmakingSession){
+    Session.updatedAt = new Date();
+}
+
+function MarkSessionReady(Session: MatchmakingSession, GameOnDeployServer: LaunchGameResult){
+    Session.host = GameOnDeployServer.host;
+    Session.port = GameOnDeployServer.port;
+    Session.serverId = GameOnDeployServer.serverId;
+    Session.phase = "READY";
+    Session.statusReason = undefined;
+    Session.readyAt = new Date();
+    MarkSessionUpdated(Session);
+}
+
+function MarkSessionFailed(Session: MatchmakingSession, Reason: string){
+    Session.phase = "FAILED";
+    Session.statusReason = Reason;
+    MarkSessionUpdated(Session);
+}
+
+function MarkSessionExpired(Session: MatchmakingSession, Reason: string){
+    Session.phase = "EXPIRED";
+    Session.statusReason = Reason;
+    MarkSessionUpdated(Session);
+}
+
+function ExpireStaleSession(Session: MatchmakingSession){
+    if(Session.phase === "FAILED" || Session.phase === "EXPIRED"){
+        return;
+    }
+
+    const LastMeaningfulUpdate = Session.lastHeartbeatAt ?? Session.readyAt ?? Session.updatedAt;
+    if(Date.now() - LastMeaningfulUpdate.getTime() > MATCHMAKING_SESSION_TTL_MS){
+        MarkSessionExpired(Session, "matchmaking_session_expired");
+    }
+}
+
+async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined): Promise<LaunchGameResult>{
     logger.info(`Querying DeployServer for GameMode: ${GameMode} HuntId ${HuntId} with ${ExpectedPlayers?.length} Expected Players!`);
 
     const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_MATCHMAKING_PATH;
@@ -44,7 +154,7 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
             GameMode: GameMode,
             GameArgs: GameArgs,
             HuntId: HuntId,
-            ExpectedPlayers: ExpectedPlayers!
+            ExpectedPlayers: ExpectedPlayers
         })
     });
 
@@ -55,19 +165,60 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
 
         return {
             succeeded: true,
-            readyNow: true,
             host: MatchmakingData.host,
-            port: MatchmakingData.port
+            port: MatchmakingData.port,
+            serverId: MatchmakingData.id,
+            statusReason: undefined
         }
     }
-    else{
-        logger.error(`DeployServer returned status ${MatchmakingResult.status}`);
 
+    logger.error(`DeployServer returned status ${MatchmakingResult.status}`);
+
+    return {
+        succeeded: false,
+        host: "",
+        port: 0,
+        serverId: undefined,
+        statusReason: `deployserver_status_${MatchmakingResult.status}`
+    };
+}
+
+async function QueryDeployserverForPlayerStatus(PlayerId: string): Promise<DeployserverPlayerStatus>{
+    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
         return {
-            succeeded: false,
-            readyNow: false,
-            host: "",
-            port: 0
+            found: false,
+            joinable: false
+        };
+    }
+
+    const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_STATUS_PATH;
+
+    try{
+        const StatusResult = await fetch(URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                PlayerId: PlayerId
+            }),
+            signal: AbortSignal.timeout(DEPLOYSERVER_STATUS_TIMEOUT_MS)
+        });
+
+        if(StatusResult.status !== 200){
+            return {
+                found: false,
+                joinable: false
+            };
+        }
+
+        return await StatusResult.json() as DeployserverPlayerStatus;
+    }
+    catch(Error){
+        logger.warn(Error, `Failed to get active gameserver status for player ${PlayerId}`);
+        return {
+            found: false,
+            joinable: false
         };
     }
 }
@@ -102,71 +253,122 @@ export async function TouchDeployserverForPlayerActivity(PlayerId: string){
 async function PopQueue(HuntId: string){
     const MatchmakingQueue = MatchmakingQueueMap.get(HuntId);
 
-    if(MatchmakingQueue!.Resolved){
+    if(MatchmakingQueue == undefined || MatchmakingQueue.Resolved){
         return;
     }
 
-    MatchmakingQueue!.Resolved = true;
-    
-    const GameOnDeployServer = await LaunchGameOnDeployserver("ISLAND", "", HuntId, MatchmakingQueue!.Players);
+    MatchmakingQueue.Resolved = true;
 
-    for(const Player of MatchmakingQueue!.Players){
-        const PlayerMatchmakingResultToUpdate = MatchmakingResultMap.get(Player);
+    for(const Player of MatchmakingQueue.Players){
+        const Session = MatchmakingSessionMap.get(Player);
 
-        if(PlayerMatchmakingResultToUpdate != undefined){
-            PlayerMatchmakingResultToUpdate.Host = GameOnDeployServer.host;
-            PlayerMatchmakingResultToUpdate.Port = GameOnDeployServer.port;
-            PlayerMatchmakingResultToUpdate.Ready = true;
+        if(Session != undefined){
+            Session.phase = "STARTING";
+            MarkSessionUpdated(Session);
+            await SyncMatchmakingActivity(Session);
         }
+    }
+    
+    const GameOnDeployServer = await LaunchGameOnDeployserver("ISLAND", "", HuntId, MatchmakingQueue.Players);
+
+    for(const Player of MatchmakingQueue.Players){
+        const Session = MatchmakingSessionMap.get(Player);
+
+        if(Session == undefined){
+            continue;
+        }
+
+        if(GameOnDeployServer.succeeded){
+            MarkSessionReady(Session, GameOnDeployServer);
+        }
+        else{
+            MarkSessionFailed(Session, GameOnDeployServer.statusReason ?? "gameserver_startup_failed");
+        }
+
+        await SyncMatchmakingActivity(Session);
     }
 
     MatchmakingQueueMap.delete(HuntId);
 }
 
-export async function CheckAndUpdateQueueStatus(PlayerId: string){
-    const PlayerMatchmakingResult = MatchmakingResultMap.get(PlayerId);
+async function TryReuseReadySession(PlayerId: string, GameMode: string, HuntId: string){
+    const ExistingSession = MatchmakingSessionMap.get(PlayerId);
 
-    if(PlayerMatchmakingResult == undefined){
+    if(ExistingSession == undefined){
         return undefined;
     }
 
-    if(!PlayerMatchmakingResult.Ready){
-        const MatchmakingQueue = MatchmakingQueueMap.get(PlayerMatchmakingResult.HuntId);
+    ExpireStaleSession(ExistingSession);
 
-        if((new Date()).getTime() - MatchmakingQueue!.LastPlayerAddedTime.getTime() > MATCHMAKING_QUEUE_WAIT_MS){
-            await PopQueue(PlayerMatchmakingResult.HuntId);
+    if(ExistingSession.phase !== "READY" || ExistingSession.gameMode !== GameMode || ExistingSession.huntId !== HuntId){
+        return undefined;
+    }
+
+    if(ExistingSession.readyAt == undefined || Date.now() - ExistingSession.readyAt.getTime() > MATCHMAKING_RECONNECT_WINDOW_MS){
+        MarkSessionExpired(ExistingSession, "reconnect_window_expired");
+        await SyncMatchmakingActivity(ExistingSession);
+        return undefined;
+    }
+
+    const DeployserverStatus = await QueryDeployserverForPlayerStatus(PlayerId);
+
+    if(DeployserverStatus.joinable && DeployserverStatus.server != undefined){
+        ExistingSession.host = DeployserverStatus.server.host;
+        ExistingSession.port = DeployserverStatus.server.port;
+        ExistingSession.serverId = DeployserverStatus.server.id;
+        MarkSessionUpdated(ExistingSession);
+        await SyncMatchmakingActivity(ExistingSession);
+
+        return ExistingSession;
+    }
+
+    MarkSessionExpired(ExistingSession, "assigned_gameserver_not_joinable");
+    await SyncMatchmakingActivity(ExistingSession);
+    return undefined;
+}
+
+export async function CheckAndUpdateQueueStatus(PlayerId: string){
+    const Session = MatchmakingSessionMap.get(PlayerId);
+
+    if(Session == undefined){
+        return undefined;
+    }
+
+    ExpireStaleSession(Session);
+
+    if(Session.phase === "QUEUED" || Session.phase === "STARTING"){
+        const MatchmakingQueue = MatchmakingQueueMap.get(Session.huntId);
+
+        if(MatchmakingQueue != undefined && (new Date()).getTime() - MatchmakingQueue.LastPlayerAddedTime.getTime() > MATCHMAKING_QUEUE_WAIT_MS){
+            await PopQueue(Session.huntId);
         }
     }
 
-    return PlayerMatchmakingResult;
+    await SyncMatchmakingActivity(Session);
+
+    return Session;
 }
 
 // TODO: This can fail if the previous party is waiting for the deployserver, and a new party is joining in.
 // Right now we handle this by failing all new players until the old party is cleared out
 // This can be MUCH better in the future
 async function QueuePlayer(HuntId: string, PlayerId: string){
-    if(MatchmakingQueueMap.get(HuntId) != undefined && !MatchmakingQueueMap.get(HuntId)?.Resolved){
-        const CurrentMMEntry = MatchmakingQueueMap.get(HuntId);
+    const ExistingQueue = MatchmakingQueueMap.get(HuntId);
 
-        CurrentMMEntry!.Players.push(PlayerId);
-        CurrentMMEntry!.LastPlayerAddedTime = new Date();
-
-        if(CurrentMMEntry!.Players.length >= 4){
-            MatchmakingResultMap.set(PlayerId, {
-                Ready: false,
-                CandidateId: crypto.randomUUID(),
-                HuntId: HuntId,
-                Host: "",
-                Port: 0
-            });
-
-            await PopQueue(HuntId);
-
-            return true;
-        }
+    if(ExistingQueue != undefined && ExistingQueue.Resolved){
+        return undefined;
     }
-    else if(MatchmakingQueueMap.get(HuntId) != undefined){
-        return false;
+
+    const Session = CreateMatchmakingSession(PlayerId, "ISLAND", "", HuntId, "QUEUED");
+    MatchmakingSessionMap.set(PlayerId, Session);
+
+    if(ExistingQueue != undefined){
+        ExistingQueue.Players.push(PlayerId);
+        ExistingQueue.LastPlayerAddedTime = new Date();
+
+        if(ExistingQueue.Players.length >= 4){
+            await PopQueue(HuntId);
+        }
     }
     else{
         MatchmakingQueueMap.set(HuntId, {
@@ -176,44 +378,93 @@ async function QueuePlayer(HuntId: string, PlayerId: string){
         });
     }
 
-    MatchmakingResultMap.set(PlayerId, {
-        Ready: false,
-        CandidateId: crypto.randomUUID(),
-        HuntId: HuntId,
-        Host: "",
-        Port: 0
-    });
+    await SyncMatchmakingActivity(Session);
 
-    return true;
+    return Session;
 }
 
 export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string, HuntId: string, PlayerId: string){
     if(MATCHMAKING_MODE === "DISABLED"){
         logger.warn("Matchmaking is disabled, refusing MM!");
 
-        return false;
+        return undefined;
     }
-    else if(MATCHMAKING_MODE === "DEPLOYSERVER"){
-        if(HuntId == undefined || HuntId.trim().length == 0 || !HuntIdRequiresMatchmaking(HuntId)){
-            const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, GameArgs, HuntId, [PlayerId]);
 
-            MatchmakingResultMap.set(PlayerId, {
-                Ready: true,
-                CandidateId: crypto.randomUUID(),
-                HuntId: HuntId,
-                Host: GameOnDeployServer.host,
-                Port: GameOnDeployServer.port
-            });
-
-            return true;
-        }
-        else{
-            return await QueuePlayer(HuntId, PlayerId);
-        }
-    }
-    else{
+    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
         logger.fatal("Unsupported MATCHMAKING_MODE!");
 
-        return false;
+        return undefined;
     }
+
+    const NormalizedHuntId = HuntId ?? "";
+    const NormalizedGameArgs = GameArgs ?? "";
+    const ReusableSession = await TryReuseReadySession(PlayerId, GameMode, NormalizedHuntId);
+
+    if(ReusableSession != undefined){
+        logger.info(`Reusing ready matchmaking session ${ReusableSession.candidateId} for ${PlayerId}`);
+        return ReusableSession;
+    }
+
+    if(!HuntIdRequiresMatchmaking(NormalizedHuntId)){
+        const Session = CreateMatchmakingSession(PlayerId, GameMode, NormalizedGameArgs, NormalizedHuntId, "STARTING");
+        MatchmakingSessionMap.set(PlayerId, Session);
+        await SyncMatchmakingActivity(Session);
+
+        const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, NormalizedGameArgs, NormalizedHuntId, [PlayerId]);
+
+        if(GameOnDeployServer.succeeded){
+            MarkSessionReady(Session, GameOnDeployServer);
+        }
+        else{
+            MarkSessionFailed(Session, GameOnDeployServer.statusReason ?? "gameserver_startup_failed");
+        }
+
+        await SyncMatchmakingActivity(Session);
+
+        return GameOnDeployServer.succeeded ? Session : undefined;
+    }
+
+    return await QueuePlayer(NormalizedHuntId, PlayerId);
+}
+
+export async function MarkMatchmakingHeartbeat(PlayerId: string){
+    const Session = MatchmakingSessionMap.get(PlayerId);
+
+    if(Session == undefined){
+        return;
+    }
+
+    Session.lastHeartbeatAt = new Date();
+    MarkSessionUpdated(Session);
+    await SyncMatchmakingActivity(Session);
+}
+
+function SerializeSession(Session: MatchmakingSession){
+    return {
+        candidateId: Session.candidateId,
+        userId: Session.userId,
+        gameMode: Session.gameMode,
+        huntId: Session.huntId,
+        host: Session.host || undefined,
+        port: Session.port || undefined,
+        phase: Session.phase,
+        statusReason: Session.statusReason,
+        createdAt: Session.createdAt.toISOString(),
+        updatedAt: Session.updatedAt.toISOString(),
+        readyAt: Session.readyAt?.toISOString(),
+        lastHeartbeatAt: Session.lastHeartbeatAt?.toISOString(),
+        serverId: Session.serverId
+    };
+}
+
+export function GetMatchmakingDebugData(){
+    return {
+        sessions: [...MatchmakingSessionMap.values()].map(SerializeSession),
+        queues: [...MatchmakingQueueMap.entries()].map(([HuntId, Queue]) => ({
+            huntId: HuntId,
+            players: Queue.Players,
+            lastPlayerAddedTime: Queue.LastPlayerAddedTime.toISOString(),
+            resolved: Queue.Resolved
+        }))
+    };
 }
