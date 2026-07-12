@@ -38,10 +38,23 @@ type ExpectedPlayer = {
     playerHuntId: string
 };
 
+type GameserverReadyPayload = {
+    id: string,
+    port: number,
+    pid: number
+};
+
+type PendingGameserverReady = {
+    port: number,
+    token: string,
+    resolve: (Payload: GameserverReadyPayload) => void
+};
+
 export type GameserverOrigin = "RAMSGATE_PREWARM" | "TRAINING_DOJO_PREWARM" | "TRAINING_DOJO_LAZY" | "HUNT_ARGS" | "HUNT_MATCHMAKER";
 
 export let Gameservers: Gameserver[] = [];
 let FreePorts: number[] = [];
+const PendingGameserverReadyById = new Map<string, PendingGameserverReady>();
 
 let RamsgateServer : Gameserver | undefined;
 let TrainingDojoServer : Gameserver | undefined;
@@ -56,6 +69,8 @@ const GAMESERVER_BINARY_PATH = process.env.GAMESERVER_BINARY_PATH!.replace(/^"|"
 const STANDARD_GAMESERVER_ARGS = ["-EpicPortal", "-server", "-nullrhi"];
 const METAGAME_API_KEY = process.env.METAGAME_API_KEY!;
 const MY_IP = process.env.MY_IP!;
+const DEPLOYSERVER_PORT = process.env.PORT!;
+const GAMESERVER_READY_CALLBACK_URL = process.env.GAMESERVER_READY_CALLBACK_URL || `http://127.0.0.1:${DEPLOYSERVER_PORT}/api/gameservers/ready`;
 const SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP = Number(process.env.SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP!);
 const GAMESERVER_STARTUP_TIMEOUT_SECONDS = Number(process.env.GAMESERVER_STARTUP_TIMEOUT_SECONDS || "60");
 const RAMSGATE_RESTART_RETRY_SECONDS = Number(process.env.RAMSGATE_RESTART_RETRY_SECONDS || "5");
@@ -173,31 +188,89 @@ function CreateAdoptedFixedPortServer(Options: StartServerOptions, Port: number,
     return AdoptedServer;
 }
 
-async function WaitForGameserverReady(Child: ChildProcess, Port: number){
-    const Deadline = Date.now() + GAMESERVER_STARTUP_TIMEOUT_SECONDS * 1000;
-
-    let ExitReason: string | undefined;
-    Child.once("exit", (Code, Signal) => {
-        ExitReason = `exit code ${Code ?? "null"} signal ${Signal ?? "null"}`;
+function RegisterPendingGameserverReady(Id: string, Port: number, Token: string){
+    return new Promise<GameserverReadyPayload>((resolve) => {
+        PendingGameserverReadyById.set(Id, {
+            port: Port,
+            token: Token,
+            resolve: resolve
+        });
     });
+}
 
-    Child.once("error", (Error) => {
-        ExitReason = `spawn error: ${Error.message}`;
-    });
-
-    while(Date.now() < Deadline){
-        if(ExitReason != undefined){
-            throw new Error(`Gameserver on port ${Port} stopped during startup: ${ExitReason}`);
-        }
-
-        if(await IsUdpPortInUse(Port)){
-            return;
-        }
-
-        await setTimeout(250);
+export function HandleGameserverReadyCallback(Token: string | undefined, Body: unknown){
+    if(typeof Body !== "object" || Body == undefined){
+        return {
+            status: 400,
+            body: {ready: false, error: "invalid_body"}
+        };
     }
 
-    throw new Error(`Gameserver on port ${Port} did not bind UDP within ${GAMESERVER_STARTUP_TIMEOUT_SECONDS}s`);
+    const Payload = Body as Partial<GameserverReadyPayload>;
+
+    if(typeof Payload.id !== "string" || typeof Payload.port !== "number" || typeof Payload.pid !== "number"){
+        return {
+            status: 400,
+            body: {ready: false, error: "invalid_payload"}
+        };
+    }
+
+    const PendingReady = PendingGameserverReadyById.get(Payload.id);
+
+    if(PendingReady == undefined){
+        return {
+            status: 404,
+            body: {ready: false, error: "unknown_gameserver"}
+        };
+    }
+
+    if(Token !== PendingReady.token){
+        return {
+            status: 403,
+            body: {ready: false, error: "invalid_token"}
+        };
+    }
+
+    if(Payload.port !== PendingReady.port){
+        return {
+            status: 409,
+            body: {ready: false, error: "port_mismatch"}
+        };
+    }
+
+    PendingReady.resolve({
+        id: Payload.id,
+        port: Payload.port,
+        pid: Payload.pid
+    });
+
+    return {
+        status: 200,
+        body: {ready: true}
+    };
+}
+
+async function WaitForGameserverReady(Child: ChildProcess, Id: string, Port: number, ReadyPromise: Promise<GameserverReadyPayload>){
+    try{
+        await Promise.race([
+            ReadyPromise,
+            new Promise<never>((_, reject) => {
+                Child.once("exit", (Code, Signal) => {
+                    reject(new Error(`Gameserver on port ${Port} stopped during startup: exit code ${Code ?? "null"} signal ${Signal ?? "null"}`));
+                });
+
+                Child.once("error", (SpawnError) => {
+                    reject(new Error(`Gameserver on port ${Port} stopped during startup: spawn error: ${SpawnError.message}`));
+                });
+            }),
+            setTimeout(GAMESERVER_STARTUP_TIMEOUT_SECONDS * 1000).then(() => {
+                throw new Error(`Gameserver on port ${Port} did not report ready within ${GAMESERVER_STARTUP_TIMEOUT_SECONDS}s`);
+            })
+        ]);
+    }
+    finally{
+        PendingGameserverReadyById.delete(Id);
+    }
 }
 
 function TransformExpectedPlayerArgs(ExpectedPlayers: ExpectedPlayer[]){
@@ -344,6 +417,9 @@ async function StartServer(Options: StartServerOptions){
         throw new Error(`Fixed gameserver port ${Port} is already in use before startup and its owner could not be identified`);
     }
 
+    const ReadyCallbackToken = crypto.randomBytes(32).toString("hex");
+    const ReadyPromise = RegisterPendingGameserverReady(Id, Port, ReadyCallbackToken);
+
     const Child = spawn(GAMESERVER_BINARY_PATH, [
         METAGAME_API_KEY,
         Port.toString(),
@@ -352,6 +428,9 @@ async function StartServer(Options: StartServerOptions){
         Options.matchmakerHuntId != undefined ? Options.matchmakerHuntId : "NO_MM_HUNTID",
         Options.expectedPlayers != undefined ? TransformExpectedPlayerArgs(Options.expectedPlayers) : "NO_EXPECTED_PLAYERS",
         MY_IP + ":" + Port.toString(),
+        Id,
+        GAMESERVER_READY_CALLBACK_URL,
+        ReadyCallbackToken,
         ...STANDARD_GAMESERVER_ARGS
     ], {
         detached: true,
@@ -403,7 +482,7 @@ async function StartServer(Options: StartServerOptions){
     Gameservers.push(NewGameserver);
 
     try{
-        await WaitForGameserverReady(Child, Port);
+        await WaitForGameserverReady(Child, Id, Port, ReadyPromise);
     }
     catch(Error){
         await CleanupFailedStartup(NewGameserver, Options);
