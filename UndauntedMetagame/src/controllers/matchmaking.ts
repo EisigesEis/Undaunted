@@ -7,6 +7,7 @@ const DEPLOYSERVER_URL = process.env.DEPLOYSERVER_URL;
 const DEPLOYSERVER_MATCHMAKING_PATH = "/api/matchmaker/handle-matchmaking-for-player";
 const DEPLOYSERVER_TOUCH_PLAYER_PATH = "/api/matchmaker/touch-player";
 const DEPLOYSERVER_STATUS_PATH = "/api/matchmaker/player-server-status";
+const DEPLOYSERVER_MATCHMAKING_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_MATCHMAKING_TIMEOUT_MS || "90000");
 const DEPLOYSERVER_TOUCH_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_TOUCH_TIMEOUT_MS || "1000");
 const DEPLOYSERVER_STATUS_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_STATUS_TIMEOUT_MS || "1000");
 const MATCHMAKING_QUEUE_WAIT_MS = Number(process.env.MATCHMAKING_QUEUE_WAIT_SECONDS || "3") * 1000;
@@ -145,18 +146,34 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
 
     const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_MATCHMAKING_PATH;
 
-    const MatchmakingResult = await fetch(URL, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            GameMode: GameMode,
-            GameArgs: GameArgs,
-            HuntId: HuntId,
-            ExpectedPlayers: ExpectedPlayers
-        })
-    });
+    let MatchmakingResult: Response;
+
+    try{
+        MatchmakingResult = await fetch(URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                GameMode: GameMode,
+                GameArgs: GameArgs,
+                HuntId: HuntId,
+                ExpectedPlayers: ExpectedPlayers
+            }),
+            signal: AbortSignal.timeout(DEPLOYSERVER_MATCHMAKING_TIMEOUT_MS)
+        });
+    }
+    catch(Error){
+        logger.error(Error, `DeployServer matchmaking request timed out or failed for HuntId ${HuntId}`);
+
+        return {
+            succeeded: false,
+            host: "",
+            port: 0,
+            serverId: undefined,
+            statusReason: "deployserver_request_failed"
+        };
+    }
 
     if(MatchmakingResult.status === 200){
         const MatchmakingData = await MatchmakingResult.json();
@@ -288,7 +305,9 @@ async function PopQueue(HuntId: string){
         await SyncMatchmakingActivity(Session);
     }
 
-    MatchmakingQueueMap.delete(HuntId);
+    if(MatchmakingQueueMap.get(HuntId) === MatchmakingQueue){
+        MatchmakingQueueMap.delete(HuntId);
+    }
 }
 
 async function TryReuseReadySession(PlayerId: string, GameMode: string, HuntId: string){
@@ -349,33 +368,44 @@ export async function CheckAndUpdateQueueStatus(PlayerId: string){
     return Session;
 }
 
-// TODO: This can fail if the previous party is waiting for the deployserver, and a new party is joining in.
-// Right now we handle this by failing all new players until the old party is cleared out
-// This can be MUCH better in the future
+function CreateQueue(HuntId: string, PlayerId: string){
+    const Queue = {
+        Players: [PlayerId],
+        LastPlayerAddedTime: new Date(),
+        Resolved: false
+    };
+
+    MatchmakingQueueMap.set(HuntId, Queue);
+
+    return Queue;
+}
+
 async function QueuePlayer(HuntId: string, PlayerId: string){
     const ExistingQueue = MatchmakingQueueMap.get(HuntId);
 
-    if(ExistingQueue != undefined && ExistingQueue.Resolved){
-        return undefined;
-    }
-
     const Session = CreateMatchmakingSession(PlayerId, "ISLAND", "", HuntId, "QUEUED");
     MatchmakingSessionMap.set(PlayerId, Session);
+    let ActiveQueue = ExistingQueue;
 
-    if(ExistingQueue != undefined){
-        ExistingQueue.Players.push(PlayerId);
-        ExistingQueue.LastPlayerAddedTime = new Date();
+    if(ActiveQueue != undefined && ActiveQueue.Resolved){
+        logger.info(`Existing queue for HuntId ${HuntId} is already starting; creating a fresh queue for ${PlayerId}`);
+        ActiveQueue = undefined;
+    }
 
-        if(ExistingQueue.Players.length >= 4){
+    if(ActiveQueue != undefined){
+        ActiveQueue.Players.push(PlayerId);
+        ActiveQueue.LastPlayerAddedTime = new Date();
+
+        if(ActiveQueue.Players.length >= 4 || MATCHMAKING_QUEUE_WAIT_MS <= 0){
             await PopQueue(HuntId);
         }
     }
     else{
-        MatchmakingQueueMap.set(HuntId, {
-            Players: [PlayerId],
-            LastPlayerAddedTime: new Date(),
-            Resolved: false
-        });
+        CreateQueue(HuntId, PlayerId);
+
+        if(MATCHMAKING_QUEUE_WAIT_MS <= 0){
+            await PopQueue(HuntId);
+        }
     }
 
     await SyncMatchmakingActivity(Session);

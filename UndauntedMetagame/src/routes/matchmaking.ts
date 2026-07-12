@@ -7,7 +7,7 @@ export const matchmakingRouter = Router();
 
 const QOS_TARGET_URL = process.env.QOS_TARGET_URL;
 const TARGET_CHANGELIST = process.env.TARGET_CHANGELIST;
-const MATCHMAKING_STATUS_PERIOD_MILLIS = Number(process.env.MATCHMAKING_STATUS_PERIOD_MILLIS || "1000");
+const MATCHMAKING_STATUS_PERIOD_MILLIS = Number(process.env.MATCHMAKING_STATUS_PERIOD_MILLIS || "500");
 
 matchmakingRouter.post("/candidate/player/register", HasUndauntedMetagameAuth, (req: any, res) => {
     logger.info(`userId ${req.AuthData.userId} is registering for matchmaking!`);
