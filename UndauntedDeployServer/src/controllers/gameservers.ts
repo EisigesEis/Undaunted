@@ -50,6 +50,11 @@ type PendingGameserverReady = {
     resolve: (Payload: GameserverReadyPayload) => void
 };
 
+type StartedGameserverProcess = {
+    processId: number,
+    child: ChildProcess | undefined
+};
+
 export type GameserverOrigin = "RAMSGATE_PREWARM" | "TRAINING_DOJO_PREWARM" | "TRAINING_DOJO_LAZY" | "HUNT_ARGS" | "HUNT_MATCHMAKER";
 
 export let Gameservers: Gameserver[] = [];
@@ -135,14 +140,18 @@ async function IsUdpPortInUse(Port: number){
     });
 }
 
-function IsGameserverProcessAlive(GameserverToCheck: Gameserver){
+function IsProcessAlive(ProcessId: number){
     try{
-        kill(GameserverToCheck.processId, 0);
+        kill(ProcessId, 0);
         return true;
     }
     catch{
         return false;
     }
+}
+
+function IsGameserverProcessAlive(GameserverToCheck: Gameserver){
+    return IsProcessAlive(GameserverToCheck.processId);
 }
 
 function GetUdpPortOwnerPid(Port: number){
@@ -250,25 +259,43 @@ export function HandleGameserverReadyCallback(Token: string | undefined, Body: u
     };
 }
 
-async function WaitForGameserverReady(Child: ChildProcess, Id: string, Port: number, ReadyPromise: Promise<GameserverReadyPayload>){
-    try{
-        await Promise.race([
-            ReadyPromise,
-            new Promise<never>((_, reject) => {
-                Child.once("exit", (Code, Signal) => {
-                    reject(new Error(`Gameserver on port ${Port} stopped during startup: exit code ${Code ?? "null"} signal ${Signal ?? "null"}`));
-                });
+async function WaitForProcessExit(ProcessId: number, Port: number, ShouldStop: () => boolean): Promise<never>{
+    while(!ShouldStop()){
+        if(!IsProcessAlive(ProcessId)){
+            throw new Error(`Gameserver on port ${Port} stopped during startup: process ${ProcessId} exited`);
+        }
 
-                Child.once("error", (SpawnError) => {
-                    reject(new Error(`Gameserver on port ${Port} stopped during startup: spawn error: ${SpawnError.message}`));
-                });
-            }),
+        await setTimeout(250);
+    }
+
+    return await new Promise<never>(() => {});
+}
+
+async function WaitForGameserverReady(StartedProcess: StartedGameserverProcess, Id: string, Port: number, ReadyPromise: Promise<GameserverReadyPayload>){
+    let StopPollingProcess = false;
+    const StartupFailurePromise = StartedProcess.child != undefined
+        ? new Promise<never>((_, reject) => {
+            StartedProcess.child!.once("exit", (Code, Signal) => {
+                reject(new Error(`Gameserver on port ${Port} stopped during startup: exit code ${Code ?? "null"} signal ${Signal ?? "null"}`));
+            });
+
+            StartedProcess.child!.once("error", (SpawnError) => {
+                reject(new Error(`Gameserver on port ${Port} stopped during startup: spawn error: ${SpawnError.message}`));
+            });
+        })
+        : WaitForProcessExit(StartedProcess.processId, Port, () => StopPollingProcess);
+
+    try{
+        return await Promise.race([
+            ReadyPromise,
+            StartupFailurePromise,
             setTimeout(GAMESERVER_STARTUP_TIMEOUT_SECONDS * 1000).then(() => {
                 throw new Error(`Gameserver on port ${Port} did not report ready within ${GAMESERVER_STARTUP_TIMEOUT_SECONDS}s`);
             })
         ]);
     }
     finally{
+        StopPollingProcess = true;
         PendingGameserverReadyById.delete(Id);
     }
 }
@@ -285,6 +312,46 @@ function TransformExpectedPlayerArgs(ExpectedPlayers: ExpectedPlayer[]){
     }
 
     return ToReturn;
+}
+
+function StartWindowsGameserverMinimized(Args: string[]): StartedGameserverProcess{
+    const ProcessIdOutput = execFileSync("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "(Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length - 1)] -WindowStyle Minimized -PassThru).Id",
+        GAMESERVER_BINARY_PATH,
+        ...Args
+    ], {encoding: "utf8"}).trim();
+    const ProcessId = Number(ProcessIdOutput);
+
+    if(!Number.isInteger(ProcessId) || ProcessId <= 0){
+        throw new Error(`Failed to start minimized gameserver process; got PID output "${ProcessIdOutput}"`);
+    }
+
+    return {
+        processId: ProcessId,
+        child: undefined
+    };
+}
+
+function StartGameserverProcess(Args: string[]): StartedGameserverProcess{
+    if(process.platform === "win32"){
+        return StartWindowsGameserverMinimized(Args);
+    }
+
+    const Child = spawn(GAMESERVER_BINARY_PATH, Args, {
+        detached: true,
+        stdio: "ignore"
+    });
+
+    Child.unref();
+
+    return {
+        processId: Child.pid!,
+        child: Child
+    };
 }
 
 export async function CleanupServer(ServerToShutdown: Gameserver){
@@ -321,6 +388,13 @@ export async function CleanupServer(ServerToShutdown: Gameserver){
 
 async function CleanupFailedStartup(NewGameserver: Gameserver, Options: StartServerOptions){
     NewGameserver.expectedShutdownReason = "startup_failed";
+
+    try{
+        kill(NewGameserver.processId);
+    }
+    catch(Error){
+        logger.warn(Error, `Failed to signal failed gameserver startup ${NewGameserver.processId} on port ${NewGameserver.port}`);
+    }
 
     Gameservers = Gameservers.filter(Server => Server !== NewGameserver);
 
@@ -420,7 +494,7 @@ async function StartServer(Options: StartServerOptions){
     const ReadyCallbackToken = crypto.randomBytes(32).toString("hex");
     const ReadyPromise = RegisterPendingGameserverReady(Id, Port, ReadyCallbackToken);
 
-    const Child = spawn(GAMESERVER_BINARY_PATH, [
+    const GameserverArgs = [
         METAGAME_API_KEY,
         Port.toString(),
         Options.map,
@@ -432,13 +506,11 @@ async function StartServer(Options: StartServerOptions){
         GAMESERVER_READY_CALLBACK_URL,
         ReadyCallbackToken,
         ...STANDARD_GAMESERVER_ARGS
-    ], {
-        detached: true,
-        stdio: "ignore"
-    });
+    ];
 
-    Child.unref();
-    Child.on("error", (Error) => {
+    const StartedProcess = StartGameserverProcess(GameserverArgs);
+
+    StartedProcess.child?.on("error", (Error) => {
         logger.error(Error, `Gameserver process failed to start for port ${Port}`);
     });
     let StartupCompleted = false;
@@ -453,15 +525,15 @@ async function StartServer(Options: StartServerOptions){
         isTrainingDojo: Options.isTrainingDojo,
         origin: Options.origin,
         trigger: Options.trigger,
-        processId: Child.pid!,
+        processId: StartedProcess.processId,
         startTime: new Date(),
         lastTouchedTime: new Date(),
         shutdownAfterSeconds: Options.shutdownAfterSeconds,
         expectedShutdownReason: undefined
     };
 
-    Child.on("exit", (Code, Signal) => {
-        const ExitMessage = `Gameserver process ${Child.pid ?? "unknown"} on port ${Port} exited with code ${Code ?? "null"} signal ${Signal ?? "null"}`;
+    StartedProcess.child?.on("exit", (Code, Signal) => {
+        const ExitMessage = `Gameserver process ${StartedProcess.processId} on port ${Port} exited with code ${Code ?? "null"} signal ${Signal ?? "null"}`;
 
         if(NewGameserver.expectedShutdownReason != undefined){
             logger.info(`${ExitMessage} after expected shutdown: ${NewGameserver.expectedShutdownReason}`);
@@ -475,14 +547,15 @@ async function StartServer(Options: StartServerOptions){
         }
 
         void CleanupServer(NewGameserver).catch((Error) => {
-            logger.error(Error, `Failed to cleanup gameserver ${Child.pid ?? "unknown"} on port ${Port} after unexpected exit`);
+            logger.error(Error, `Failed to cleanup gameserver ${StartedProcess.processId} on port ${Port} after unexpected exit`);
         });
     });
 
     Gameservers.push(NewGameserver);
 
     try{
-        await WaitForGameserverReady(Child, Id, Port, ReadyPromise);
+        const ReadyPayload = await WaitForGameserverReady(StartedProcess, Id, Port, ReadyPromise);
+        NewGameserver.processId = ReadyPayload.pid;
     }
     catch(Error){
         await CleanupFailedStartup(NewGameserver, Options);
@@ -491,7 +564,7 @@ async function StartServer(Options: StartServerOptions){
 
     StartupCompleted = true;
 
-    logger.info(`Gameserver ${Child.pid} is ready on ${MY_IP}:${Port} origin=${Options.origin} trigger=${Options.trigger} map=${Options.map}`);
+    logger.info(`Gameserver ${NewGameserver.processId} is ready on ${MY_IP}:${Port} origin=${Options.origin} trigger=${Options.trigger} map=${Options.map}`);
 
     return NewGameserver;
 }
