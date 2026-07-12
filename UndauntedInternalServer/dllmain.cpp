@@ -7,6 +7,9 @@
 #include <ranges>
 #include <cwchar>
 #include <map>
+#include <winhttp.h>
+
+#pragma comment(lib, "winhttp.lib")
 
 #include "framework.h"
 #include "SDK.hpp"
@@ -32,6 +35,9 @@ namespace Globals {
     const wchar_t* ExpectedPlayerString = nullptr;
     int Port = 0;
     const wchar_t* MyIpAndPort = nullptr;
+    std::wstring GameserverId;
+    std::wstring ReadyCallbackUrl;
+    std::wstring ReadyCallbackToken;
     std::wstring MetagameAddress;
 
     bool EnableLogging = true;
@@ -222,6 +228,94 @@ __declspec(dllexport) const char* DummyLinkFunc() {
     return "mrow :3";
 }
 
+static std::string WideToUtf8(const std::wstring& Value) {
+    if (Value.empty())
+        return "";
+
+    int Size = WideCharToMultiByte(CP_UTF8, 0, Value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+
+    if (Size <= 0)
+        return "";
+
+    std::string Result(Size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, Value.c_str(), -1, Result.data(), Size, nullptr, nullptr);
+    Result.pop_back();
+
+    return Result;
+}
+
+static bool SendReadyCallback() {
+    if (Globals::GameserverId.empty() || Globals::ReadyCallbackUrl.empty() || Globals::ReadyCallbackToken.empty())
+        return true;
+
+    URL_COMPONENTS UrlComponents = {};
+    wchar_t HostName[256] = {};
+    wchar_t UrlPath[1024] = {};
+    wchar_t ExtraInfo[1024] = {};
+
+    UrlComponents.dwStructSize = sizeof(UrlComponents);
+    UrlComponents.lpszHostName = HostName;
+    UrlComponents.dwHostNameLength = ARRAYSIZE(HostName);
+    UrlComponents.lpszUrlPath = UrlPath;
+    UrlComponents.dwUrlPathLength = ARRAYSIZE(UrlPath);
+    UrlComponents.lpszExtraInfo = ExtraInfo;
+    UrlComponents.dwExtraInfoLength = ARRAYSIZE(ExtraInfo);
+
+    if (!WinHttpCrackUrl(Globals::ReadyCallbackUrl.c_str(), 0, 0, &UrlComponents)) {
+        if (Globals::EnableLogging)
+            std::cout << "Failed to parse ready callback URL" << std::endl;
+        return false;
+    }
+
+    DWORD RequestFlags = UrlComponents.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+
+    HINTERNET Session = WinHttpOpen(L"UndauntedInternalServer/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+
+    if (!Session)
+        return false;
+
+    HINTERNET Connect = WinHttpConnect(Session, HostName, UrlComponents.nPort, 0);
+
+    if (!Connect) {
+        WinHttpCloseHandle(Session);
+        return false;
+    }
+
+    std::wstring RequestPath = std::wstring(UrlPath) + std::wstring(ExtraInfo);
+
+    HINTERNET Request = WinHttpOpenRequest(Connect, L"POST", RequestPath.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, RequestFlags);
+
+    if (!Request) {
+        WinHttpCloseHandle(Connect);
+        WinHttpCloseHandle(Session);
+        return false;
+    }
+
+    std::string Body = "{\"id\":\"" + WideToUtf8(Globals::GameserverId) + "\",\"port\":" + std::to_string(Globals::Port) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) + "}";
+    std::wstring Headers = L"Content-Type: application/json\r\nx-undaunted-ready-token: " + Globals::ReadyCallbackToken + L"\r\n";
+
+    BOOL Sent = WinHttpSendRequest(Request, Headers.c_str(), (DWORD)-1L, (LPVOID)Body.data(), (DWORD)Body.size(), (DWORD)Body.size(), 0);
+    BOOL Received = Sent ? WinHttpReceiveResponse(Request, nullptr) : FALSE;
+    DWORD StatusCode = 0;
+    DWORD StatusCodeSize = sizeof(StatusCode);
+
+    if (Received) {
+        WinHttpQueryHeaders(Request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &StatusCode, &StatusCodeSize, WINHTTP_NO_HEADER_INDEX);
+    }
+
+    WinHttpCloseHandle(Request);
+    WinHttpCloseHandle(Connect);
+    WinHttpCloseHandle(Session);
+
+    bool Success = Received && StatusCode >= 200 && StatusCode < 300;
+
+    if (Globals::EnableLogging) {
+        std::cout << "Ready callback status: " << StatusCode << std::endl;
+    }
+
+    return Success;
+}
+
 void MainThread() {
     while (!UWorld::GetWorld()) {
         if (Globals::AmServer) {
@@ -232,9 +326,9 @@ void MainThread() {
         }
     }
 
-    Sleep(3 * 1000);
-
     if (!Globals::AmServer) {
+        Sleep(3 * 1000);
+
         UEngine* Engine = UEngine::GetEngine();
 
         UInputSettings::GetDefaultObj()->ConsoleKeys[0].KeyName = UKismetStringLibrary::Conv_StringToName(L"F2");
@@ -319,6 +413,53 @@ bool EnableWatchdog = true;
 
 void* OrigGameEngineTick = nullptr;
 
+static float ListenReadinessElapsed = 0.0f;
+static int ListenReadinessStableTicks = 0;
+static bool ListenReadinessFallbackLogged = false;
+
+static bool IsServerReadyToListen() {
+    UWorld* World = UWorld::GetWorld();
+    UEngine* Engine = UEngine::GetEngine();
+
+    if (!World || !Engine || !World->NetworkNotify)
+        return false;
+
+    if (World->Levels.Num() <= 0)
+        return false;
+
+    for (ULevel* Level : World->Levels) {
+        if (Level)
+            return true;
+    }
+
+    return false;
+}
+
+static bool ShouldAttemptListen(float DeltaTime) {
+    ListenReadinessElapsed += DeltaTime;
+
+    if (IsServerReadyToListen()) {
+        ListenReadinessStableTicks++;
+
+        if (ListenReadinessStableTicks >= 2)
+            return true;
+    }
+    else {
+        ListenReadinessStableTicks = 0;
+    }
+
+    if (ListenReadinessElapsed >= 10.0f) {
+        if (!ListenReadinessFallbackLogged && Globals::EnableLogging) {
+            ListenReadinessFallbackLogged = true;
+            std::cout << "Server readiness fallback elapsed; attempting listen" << std::endl;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender) {
     reinterpret_cast<void(*)(UGameEngine*, float, char)>(OrigGameEngineTick)(GameEngine, DeltaTime, CanRender);
 
@@ -347,11 +488,13 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
         Networking::TickNetworking();
     }
 
-    if (Globals::DoListen) {
+    if (Globals::DoListen && ShouldAttemptListen(DeltaTime)) {
         Globals::DoListen = false;
-        Networking::Listen(UEngine::GetEngine(), Globals::Port);
+        Globals::Listening = Networking::Listen(UEngine::GetEngine(), Globals::Port);
 
-        Globals::Listening = true;
+        if (Globals::Listening) {
+            SendReadyCallback();
+        }
     }
 
     if (Globals::Listening && Networking::NetDriver) {
@@ -920,6 +1063,12 @@ void Init() {
             Globals::MatchmakerHuntId = Args[5];
             Globals::ExpectedPlayerString = Args[6];
             Globals::MyIpAndPort = Args[7];
+
+            if (NumArgs > 11 && Args[8][0] != L'-') {
+                Globals::GameserverId = Args[8];
+                Globals::ReadyCallbackUrl = Args[9];
+                Globals::ReadyCallbackToken = Args[10];
+            }
 
             if (Globals::Port >= 8776) {
                 EnableWatchdog = false;
