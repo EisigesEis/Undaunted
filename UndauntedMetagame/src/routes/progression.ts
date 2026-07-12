@@ -2,10 +2,61 @@ import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
 import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, ProgressionError, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
+import progressionConfig from "../vendor/progression_config.json";
 
 // TODO: We will be gaining progression support very soon, but for now just a stub
 
 export const progressionRouter = Router();
+
+const STUB_MAX_PROGRESS = 99999999;
+const STUB_SEASON_RANK = 99999999;
+
+const StubbedMasteryTrackIds = [
+    "MasteryTrack_PlayerLevel",
+    "MasteryTrack_Behemoth",
+    "MasteryTrack_Weapon_Strikers",
+    "MasteryTrack_Weapon_Hammer",
+    "MasteryTrack_Weapon_Repeaters",
+    "MasteryTrack_Weapon_ChainBlades",
+    "MasteryTrack_Weapon_Axe",
+    "MasteryTrack_Weapon_Sword",
+    "MasteryTrack_Weapon_Spear",
+];
+
+const STUB_CONFIRMED_DATE = new Date().toISOString();
+const ProgressionConfigPaths = progressionConfig.payload.paths as { progression_id: string, requirements?: { rank_id: number }[] }[];
+
+function GetConfiguredMaxRank(ProgressionId: string){
+    const ProgressionPath = ProgressionConfigPaths.find((Path) => Path.progression_id === ProgressionId);
+
+    if(!ProgressionPath?.requirements?.length){
+        return STUB_SEASON_RANK;
+    }
+
+    return Math.max(...ProgressionPath.requirements.map((Requirement) => Requirement.rank_id));
+}
+
+const StubbedMasteryProgressTrackTemplates = StubbedMasteryTrackIds.map((ProgressionId) => {
+    const ConfirmedRank = GetConfiguredMaxRank(ProgressionId);
+
+    return {
+        progression_id: ProgressionId,
+        progress: STUB_MAX_PROGRESS,
+        confirmed_fremium_rank: ConfirmedRank,
+        confirmed_premium_rank: ConfirmedRank,
+        confirmed_date: STUB_CONFIRMED_DATE,
+    };
+});
+const StubbedProgressTrackTemplates = [
+    {
+        progression_id: "season09b",
+        progress: STUB_MAX_PROGRESS,
+        confirmed_fremium_rank: STUB_SEASON_RANK,
+        confirmed_premium_rank: STUB_SEASON_RANK,
+        confirmed_date: STUB_CONFIRMED_DATE,
+    },
+    ...StubbedMasteryProgressTrackTemplates,
+];
 
 function StatusForProgressionError(Error: ProgressionError){
     switch(Error){
@@ -108,80 +159,7 @@ progressionRouter.get("/progression/objectives/:userId", HasUndauntedMetagameAut
             objectives: [
                 
             ],
-            progress_tracks: [
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_PlayerLevel",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Behemoth",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Strikers",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Hammer",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Repeaters",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_ChainBlades",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Axe",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Sword",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Spear",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                }
-            ]
+            progress_tracks: StubbedMasteryProgressTrackTemplates.map((TrackTemplate) => ({ phx_account_id: RequestorAccountId, ...TrackTemplate }))
         }
     })
 });
@@ -272,87 +250,6 @@ progressionRouter.get("/progression/:userId", HasUndauntedMetagameAuth, (req: an
     res.json({
         code: null,
         message: "OK",
-        payload: [
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "season09b",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_PlayerLevel",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Behemoth",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Strikers",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Hammer",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Repeaters",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_ChainBlades",
-                progress: 99999999,
-                confirmed_fremium_rank: 99,
-                confirmed_premium_rank: 99,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Axe",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Sword",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Warpike",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            }
-        ]
+        payload: StubbedProgressTrackTemplates.map((TrackTemplate) => ({ phx_account_id: RequestorAccountId, ...TrackTemplate }))
     })
 });
