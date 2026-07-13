@@ -194,7 +194,6 @@ class UFunction* UClass::GetFunction(const char* ClassName, const char* FuncName
 {
 	for(const UStruct* Clss = this; Clss; Clss = Clss->SuperStruct)
 	{
-		std::cout << Clss->GetName() << std::endl;
 		if (Clss->GetName() != ClassName)
 			continue;
 			

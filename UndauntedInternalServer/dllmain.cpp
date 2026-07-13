@@ -463,27 +463,6 @@ static bool ShouldAttemptListen(float DeltaTime) {
 void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender) {
     reinterpret_cast<void(*)(UGameEngine*, float, char)>(OrigGameEngineTick)(GameEngine, DeltaTime, CanRender);
 
-    if (GetAsyncKeyState(VK_F7)) {
-        for (int i = 0; i < SDK::UObject::GObjects->Num(); i++)
-        {
-            SDK::UObject* Obj = SDK::UObject::GObjects->GetByIndex(i);
-
-            if (!Obj)
-                continue;
-
-            if (Obj->IsA(SDK::UArenaMapHuntsFeature::StaticClass()))
-            {
-                UArenaMapHuntsFeature* Quest = (UArenaMapHuntsFeature*)Obj;
-                
-                std::cout << Quest->bEnabled << std::endl;
-            }
-        }
-
-        while (GetAsyncKeyState(VK_F7)) {
-
-        }
-    }
-
     if (Globals::Listening) {
         Networking::TickNetworking();
     }
@@ -518,8 +497,8 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
         }
 
         for (UNetConnection* Conn : Networking::NetDriver->ClientConnections) {
-            if (Conn->PlayerController && Conn->PlayerController->Pawn && Conn->PlayerController->Pawn->IsA(ABP_PlayerCharacter_C::StaticClass())) {
-                ((ABP_PlayerCharacter_C*)Conn->PlayerController->Pawn)->TickStamina(ECityExecFilter::Both, ERemoteExecFilter::All);
+            if (Conn->PlayerController && Conn->PlayerController->Pawn) {
+                ((ABP_PlayerCharacter_C*)Conn->PlayerController->Pawn)->TickStamina(ECityExecFilter::Both, ERemoteExecFilter::All); // TODO: Risky cast, but IsA brutalizes our speed
             }
         }
     }
@@ -647,9 +626,6 @@ APlayerStart* GetStartSpotHook(void* a1, void* a2, void* a3) {
 }
 
 bool ServerTryActivateAbilityInternal(UAbilitySystemComponent* Component, FGameplayAbilitySpecHandle& AbilityHandle, bool InputPressed, FPredictionKey& PredictionKey, FGameplayEventData* TriggerEventData) {
-    if (Globals::EnableLogging)
-    std::cout << "Activated ability!" << std::endl;
-
     if(InputPressed)
         Component->ServerSetInputPressed(AbilityHandle);
 
@@ -708,8 +684,6 @@ void* OrigProcessEvent = nullptr;
 void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
     static UFunction* ServerTryActivateAbilityWithEventData = nullptr;
     static UFunction* ServerTryActivateAbility = nullptr;
-    static UFunction* OnAirshipUpdated = nullptr;
-    static UFunction* OnPostMitDealtAnyDamage = nullptr;
 
     if (Function == ServerTryActivateAbilityWithEventData || (!ServerTryActivateAbilityWithEventData && Function->GetFullName().contains("ServerTryActivateAbilityWithEventData"))) {
         ServerTryActivateAbilityWithEventData = Function;
@@ -725,39 +699,6 @@ void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
 
         ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, nullptr);
     }
-
-    /*
-    if (Function == OnPostMitDealtAnyDamage || (!OnPostMitDealtAnyDamage && Function->GetFullName().contains("OnPostMitDealtAnyDamage"))) {
-        OnPostMitDealtAnyDamage = Function;
-
-        //OnPostMitDamage
-        Params::lantern_equipped_ab_C_OnPostMitDealtAnyDamage* LanternParms = (Params::lantern_equipped_ab_C_OnPostMitDealtAnyDamage*)Parms;
-
-        UGameplayAbility* Obj = (UGameplayAbility*)Object;
-
-        ABP_PlayerCharacter_C* PlayerCharacter = (ABP_PlayerCharacter_C*)Obj->GetAvatarActorFromActorInfo();
-
-        if (PlayerCharacter) {
-            AArchonWeapon* Weapon = PlayerCharacter->GetWeapon();
-
-            if (Weapon && Weapon->IsA(ABP_EB_Weapon_C::StaticClass())) {
-                UFunction* PostMitFunc = Weapon->Class->GetFunction("BP_EB_Weapon_C", "OnPostMitDamage");
-
-                if (PostMitFunc) {
-                    //std::cout << "Proc'ing Post-mit callback on compat weapon!" << std::endl;
-
-                    void* NewLanternParms = malloc(sizeof(Params::lantern_equipped_ab_C_OnPostMitDealtAnyDamage));
-
-                    memcpy_s(NewLanternParms, sizeof(Params::lantern_equipped_ab_C_OnPostMitDealtAnyDamage), LanternParms, sizeof(Params::lantern_equipped_ab_C_OnPostMitDealtAnyDamage));
-
-                    reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEvent)(Weapon, PostMitFunc, NewLanternParms);
-
-                    free(NewLanternParms);
-                }
-            }
-        }
-    }
-    */
 
     reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEvent)(Object, Function, Parms);
 }

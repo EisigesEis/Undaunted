@@ -219,16 +219,12 @@ namespace Networking {
                 if (!IsActorReplicationCandidate(World, Actor))
                     continue;
 
-                if ((Actor->IsA(APlayerController::StaticClass()))) {
+                if (Actor->Class->CastFlags & EClassCastFlags::PlayerController) {
                     if (Actor != Connection->OwningActor) {
                         continue;
                     }
                     else {
-                        //*(uint8_t*)((uintptr_t)Actor + 0xA14) = 0x1;
                         Connection->ViewTarget = ((APlayerController*)Actor)->GetViewTarget();
-
-                        if (!Connection->ViewTarget)
-                            std::cout << "NULL VIEWTARGET BAD THINGS WILL HAPPEN" << std::endl;
 
                         reinterpret_cast<void(*)(APlayerController*)>(BaseAddress + 0x359F9D0)((APlayerController*)Actor);
                     }
