@@ -314,51 +314,11 @@ function TransformExpectedPlayerArgs(ExpectedPlayers: ExpectedPlayer[]){
     return ToReturn;
 }
 
-function StartWindowsGameserverMinimized(Args: string[]): StartedGameserverProcess{
-    const PowerShellCommand = [
-        "$ErrorActionPreference = 'Stop'",
-        "$ProgressPreference = 'SilentlyContinue'",
-        "$FilePath = $env:UNDAUNTED_GAMESERVER_BINARY_PATH",
-        "[string[]]$ArgumentList = @($env:UNDAUNTED_GAMESERVER_ARGS_JSON | ConvertFrom-Json)",
-        "(Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Minimized -PassThru).Id"
-    ].join("\n");
-
-    const ProcessIdOutput = execFileSync("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        Buffer.from(PowerShellCommand, "utf16le").toString("base64")
-    ], {
-        encoding: "utf8",
-        env: {
-            ...process.env,
-            UNDAUNTED_GAMESERVER_BINARY_PATH: GAMESERVER_BINARY_PATH,
-            UNDAUNTED_GAMESERVER_ARGS_JSON: JSON.stringify(Args)
-        }
-    }).trim();
-    const ProcessIdMatch = ProcessIdOutput.match(/(?:^|\r?\n)\s*(\d+)\s*(?:\r?\n|$)/);
-    const ProcessId = ProcessIdMatch ? Number(ProcessIdMatch[1]) : NaN;
-
-    if(!Number.isInteger(ProcessId) || ProcessId <= 0){
-        throw new Error(`Failed to start minimized gameserver process; got PID output "${ProcessIdOutput}"`);
-    }
-
-    return {
-        processId: ProcessId,
-        child: undefined
-    };
-}
-
-function StartGameserverProcess(Args: string[]): StartedGameserverProcess{
-    if(process.platform === "win32"){
-        return StartWindowsGameserverMinimized(Args);
-    }
-
+async function StartGameserverProcess(Args: string[]): Promise<StartedGameserverProcess>{
     const Child = spawn(GAMESERVER_BINARY_PATH, Args, {
         detached: true,
-        stdio: "ignore"
+        stdio: "ignore",
+        windowsHide: false
     });
 
     Child.unref();
@@ -523,7 +483,7 @@ async function StartServer(Options: StartServerOptions){
         ...STANDARD_GAMESERVER_ARGS
     ];
 
-    const StartedProcess = StartGameserverProcess(GameserverArgs);
+    const StartedProcess = await StartGameserverProcess(GameserverArgs);
 
     StartedProcess.child?.on("error", (Error) => {
         logger.error(Error, `Gameserver process failed to start for port ${Port}`);
