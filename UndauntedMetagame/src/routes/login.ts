@@ -4,7 +4,7 @@ import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth
 import { GetDb } from "../db";
 import { users } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { GetUsernameForUserId } from "../controllers/login";
+import { GetDisplayUsernameForUserId, GetUsernameForUserId } from "../controllers/login";
 
 export const loginRouter = Router();
 
@@ -113,23 +113,52 @@ loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) =
 
 loginRouter.post("/accountinfo/public", HasUndauntedMetagameAuth, async (req: any, res) => {
     const AccountIdToLookupFromRequest = req.body.accountId;
-    const RequestorAccountId = req.AuthData.userId;
 
-    const Username = await GetUsernameForUserId(AccountIdToLookupFromRequest);
+    let Username = AccountIdToLookupFromRequest;
+    try {
+        Username = await GetDisplayUsernameForUserId(AccountIdToLookupFromRequest);
+    }
+    catch (error) {
+        logger.warn(error, `Public account lookup fell back to account id for ${AccountIdToLookupFromRequest}`);
+    }
 
     // We allow anybody to look up anybody's username from account id
 
     res.status(200);
     res.json({
-        accountId: RequestorAccountId,
+        accountId: AccountIdToLookupFromRequest,
         isSubscribed: true,
         language: null,
         linkedAccounts: [
             {
-                accountId: RequestorAccountId,
+                accountId: AccountIdToLookupFromRequest,
                 accountType: "epic"
             }
         ],
         username: Username
+    });
+});
+
+loginRouter.post("/account/mapping", HasUndauntedMetagameAuth, (req: any, res) => {
+    const RequestedIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const SourceAccountType = typeof req.body?.srcAccountType === "string" ? req.body.srcAccountType : "epic";
+    const TargetAccountType = SourceAccountType.toLowerCase() === "phoenix" ? "epic" : "phoenix";
+
+    const AccountMappings = Object.fromEntries(RequestedIds
+        .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
+        .map((AccountId) => [
+            AccountId,
+            {
+                accountId: AccountId,
+                accountType: TargetAccountType
+            }
+        ]));
+
+    logger.info(`Account mapping ${SourceAccountType} -> ${TargetAccountType} for ${Object.keys(AccountMappings).length} account(s)`);
+
+    res.status(200);
+    res.json({
+        accountMappings: AccountMappings,
+        sourceAccountType: SourceAccountType
     });
 });

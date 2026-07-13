@@ -2,7 +2,7 @@ import { Router } from "express";
 import { logger } from "../logger";
 import { CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
-import { GetUsernameForUserId } from "../controllers/login";
+import { GetDisplayUsernameForUserId, GetUsernameForUserId } from "../controllers/login";
 
 export const eosRouter = Router();
 
@@ -133,6 +133,33 @@ eosRouter.get("/account/api/public/account/:AccId/externalAuths", (req, res) => 
     logger.info("External Auths (stubbed)");
 
     res.json({});
+});
+
+eosRouter.get("/epic/id/v2/sdk/accounts", async (req, res) => {
+    const AccountIds = Array.isArray(req.query.accountId)
+        ? req.query.accountId
+        : req.query.accountId != undefined
+            ? [req.query.accountId]
+            : [];
+
+    logger.info(`EOS SDK account lookup for ${AccountIds.length} account(s)`);
+
+    const Accounts = await Promise.all(AccountIds
+        .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
+        .map(async (AccountId) => ({
+            accountId: AccountId,
+            displayName: await GetDisplayUsernameForUserId(AccountId),
+            preferredLanguage: "en",
+            linkedAccounts: [
+                {
+                    identityProviderId: "epic",
+                    accountId: AccountId,
+                    displayName: await GetDisplayUsernameForUserId(AccountId)
+                }
+            ]
+        })));
+
+    res.json(Accounts);
 });
 
 eosRouter.delete("/account/api/oauth/sessions/kill", async (req, res) => {

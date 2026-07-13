@@ -24,3 +24,36 @@ export async function GetUsernameForUserId(userId: string){
 
     return UserFromDb.name;
 }
+
+export async function GetDisplayUsernameForUserId(userId: string){
+    const Username = await GetUsernameForUserId(userId);
+    if(!IsGeneratedDisplayUsername(Username, userId)){
+        return Username;
+    }
+
+    for(const LocalUserId of [process.env.LOCAL_USER_ID, process.env.DEFAULT_USER_ID]){
+        if(LocalUserId == undefined || LocalUserId.length === 0 || LocalUserId === userId){
+            continue;
+        }
+
+        try{
+            const LocalUsername = await GetUsernameForUserId(LocalUserId);
+            if(!IsGeneratedDisplayUsername(LocalUsername, LocalUserId)){
+                return LocalUsername;
+            }
+        }
+        catch{
+        }
+    }
+
+    return Username;
+}
+
+function IsGeneratedDisplayUsername(username: string, userId: string){
+    const NormalizedUsername = username.trim().toLowerCase();
+    const NormalizedUserId = userId.trim().toLowerCase();
+
+    return NormalizedUsername.length === 0
+        || NormalizedUsername === NormalizedUserId
+        || /^(uid[-_]|local-\d+$|uuk_)/i.test(username);
+}
