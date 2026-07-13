@@ -6,6 +6,14 @@ import { DoesCharacterBelongToUserId } from "./character";
 
 export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_item" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
+export type InventoryTransactionData = {
+    createdInstancedItems: any[];
+    updatedInstancedItems: any[];
+    updatedStackedItems: any[];
+    removedInstancedItems: any[];
+};
+
+const NonConsumableCatalogIdRegex = /^(QI_.*|CONTAINER_CORE_.*_CELLCORE)$/;
 
 class InventoryConflictError extends Error {
     constructor(message: string){
@@ -137,14 +145,19 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
     }
 }
 
-export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult<any[]>>{
+export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult<InventoryTransactionData>>{
     InstancedItemsToAdd ??= [];
     StackedItemsToAdd ??= [];
     InstancedItemsToRemove ??= [];
     StackedItemsToRemove ??= [];
     InstancedItemsToSave ??= [];
 
-    let TouchedStackedItems: any[] = []; // TODO: Clean this up if this ends up working
+    const TransactionData: InventoryTransactionData = {
+        createdInstancedItems: [],
+        updatedInstancedItems: [],
+        updatedStackedItems: [],
+        removedInstancedItems: [],
+    };
 
     if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
         logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
@@ -155,7 +168,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
     const ShouldTouchStackedItems = StackedItemsToAdd.length > 0 || StackedItemsToRemove.length > 0;
 
     if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
-        return {success: true};
+        return {success: true, data: TransactionData};
     }
 
     try{
@@ -176,15 +189,20 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                 const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
                 let DidUpdateInstancedItems = false;
 
-                // for(const ItemToRemove of InstancedItemsToRemove){
-                //     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
+                for(const ItemToRemove of InstancedItemsToRemove){
+                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
 
-                //     if(ItemIndex >= 0){
-                //         AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
-                //         InstancedItems.splice(ItemIndex, 1);
-                //         DidUpdateInstancedItems = true;
-                //     }
-                // }
+                    if(ItemIndex >= 0){
+                        if(NonConsumableCatalogIdRegex.test(ItemToRemove?.catalogId) || NonConsumableCatalogIdRegex.test(InstancedItems[ItemIndex]?.catalogId)){
+                            continue;
+                        }
+
+                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
+                        const [RemovedItem] = InstancedItems.splice(ItemIndex, 1);
+                        TransactionData.removedInstancedItems.push(RemovedItem);
+                        DidUpdateInstancedItems = true;
+                    }
+                }
 
                 for(const ItemToSave of InstancedItemsToSave){
                     const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
@@ -195,11 +213,13 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                         }
 
                         InstancedItems[ItemIndex] = ItemToSave;
+                        TransactionData.updatedInstancedItems.push(ItemToSave);
                         DidUpdateInstancedItems = true;
                     }
                     else{
                         AssertValidIncomingInstancedItem(ItemToSave, "save");
                         InstancedItems.push(ItemToSave);
+                        TransactionData.createdInstancedItems.push(ItemToSave);
                         DidUpdateInstancedItems = true;
                     }
                 }
@@ -213,11 +233,13 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                         }
 
                         InstancedItems[ItemIndex] = ItemToAdd;
+                        TransactionData.updatedInstancedItems.push(ItemToAdd);
                         DidUpdateInstancedItems = true;
                     }
                     else{
                         AssertValidIncomingInstancedItem(ItemToAdd, "add");
                         InstancedItems.push(ItemToAdd);
+                        TransactionData.createdInstancedItems.push(ItemToAdd);
                         DidUpdateInstancedItems = true;
                     }
                 }
@@ -230,29 +252,37 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             if(ShouldTouchStackedItems){
                 const StackedItems: any[] = JSON.parse(CurrentInventory.stackedItems);
 
-                // for(const ItemToRemove of StackedItemsToRemove){
-                //     const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
+                for(const ItemToRemove of StackedItemsToRemove){
+                    if(NonConsumableCatalogIdRegex.test(ItemToRemove?.catalogId)){
+                        continue;
+                    }
 
-                //     if(ItemIndex < 0){
-                //         continue;
-                //     }
+                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
 
-                //     StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
+                    if(ItemIndex < 0){
+                        continue;
+                    }
 
-                //     if(StackedItems[ItemIndex].quantity <= 0){
-                //         StackedItems.splice(ItemIndex, 1);
-                //     }
-                // }
+                    StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
+
+                    if(StackedItems[ItemIndex].quantity <= 0){
+                        TransactionData.updatedStackedItems.push({...StackedItems[ItemIndex], quantity: 0});
+                        StackedItems.splice(ItemIndex, 1);
+                    }
+                    else{
+                        TransactionData.updatedStackedItems.push(StackedItems[ItemIndex]);
+                    }
+                }
 
                 for(const ItemToAdd of StackedItemsToAdd){
                     const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToAdd.catalogId);
 
                     if(ItemIndex >= 0){
                         StackedItems[ItemIndex].quantity += ItemToAdd.quantity;
-                        TouchedStackedItems.push(StackedItems[ItemIndex]);
+                        TransactionData.updatedStackedItems.push(StackedItems[ItemIndex]);
                     }
                     else{
-                        TouchedStackedItems.push(ItemToAdd);
+                        TransactionData.updatedStackedItems.push(ItemToAdd);
                         StackedItems.push(ItemToAdd);
                     }
                 }
@@ -285,7 +315,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         return {success: false, error: "db_error"};
     }
 
-    return {success: true, data: TouchedStackedItems};
+    return {success: true, data: TransactionData};
 }
 
 export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string): Promise<InventoryResult<{characterId: string, instancedItems: any[], stackedItems: any[]}>>{

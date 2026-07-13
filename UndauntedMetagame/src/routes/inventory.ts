@@ -68,10 +68,10 @@ inventoryRouter.post("/inventory", HasUndauntedMetagameAuth, async (req: any, re
 
         res.status(200);
         res.json({
-            createdInstancedItems: InstancedItemsToAdd,
-            updatedInstancedItems: [], // TODO: Actually properly diff & merge the JSON blobs
-            updatedStackedItems: TransactionResult.data != undefined ? TransactionResult.data : [],
-            removedInstancedItems: InstancedItemsToRemove
+            createdInstancedItems: TransactionResult.data?.createdInstancedItems ?? [],
+            updatedInstancedItems: TransactionResult.data?.updatedInstancedItems ?? [],
+            updatedStackedItems: TransactionResult.data?.updatedStackedItems ?? [],
+            removedInstancedItems: TransactionResult.data?.removedInstancedItems ?? []
         });
 
         return;
