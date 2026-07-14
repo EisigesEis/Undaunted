@@ -57,6 +57,11 @@ type StartedGameserverProcess = {
 
 export type GameserverOrigin = "RAMSGATE_PREWARM" | "TRAINING_DOJO_PREWARM" | "TRAINING_DOJO_LAZY" | "HUNT_ARGS" | "HUNT_MATCHMAKER";
 
+type ProcessExitInfo = {
+    code: number | null,
+    signal: NodeJS.Signals | null
+};
+
 export let Gameservers: Gameserver[] = [];
 let FreePorts: number[] = [];
 const PendingGameserverReadyById = new Map<string, PendingGameserverReady>();
@@ -110,6 +115,54 @@ function GetHuntIdleShutdownSeconds(HuntId: string | undefined, MatchmakerHuntId
 
     return HUNT_IDLE_SHUTDOWN_SECONDS;
 }
+
+function FormatHex32(Value: number){
+    return `0x${(Value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+}
+
+function ToSigned32(Value: number){
+    return Value > 0x7FFFFFFF ? Value - 0x100000000 : Value;
+}
+
+function DescribeWindowsExitCode(Code: number | null){
+    if(Code == undefined){
+        return "code=null";
+    }
+
+    const UnsignedCode = Code >>> 0;
+    const SignedCode = ToSigned32(UnsignedCode);
+    const KnownStatus = KnownWindowsExitStatuses.get(UnsignedCode);
+    const Parts = [
+        `code=${Code}`,
+        `hex=${FormatHex32(UnsignedCode)}`
+    ];
+
+    if(SignedCode !== Code){
+        Parts.push(`signed=${SignedCode}`);
+    }
+
+    if(KnownStatus != undefined){
+        Parts.push(`status=${KnownStatus}`);
+    }
+
+    return Parts.join(" ");
+}
+
+function DescribeProcessExit(Exit: ProcessExitInfo){
+    return `${DescribeWindowsExitCode(Exit.code)} signal=${Exit.signal ?? "null"}`;
+}
+
+const KnownWindowsExitStatuses = new Map<number, string>([
+    [0xC0000005, "STATUS_ACCESS_VIOLATION"],
+    [0xC000001D, "STATUS_ILLEGAL_INSTRUCTION"],
+    [0xC00000FD, "STATUS_STACK_OVERFLOW"],
+    [0xC0000135, "STATUS_DLL_NOT_FOUND"],
+    [0xC0000139, "STATUS_ENTRYPOINT_NOT_FOUND"],
+    [0xC0000142, "STATUS_DLL_INIT_FAILED"],
+    [0xC0000409, "STATUS_STACK_BUFFER_OVERRUN"],
+    [0xC0000374, "STATUS_HEAP_CORRUPTION"],
+    [0xE0434352, "CLR_EXCEPTION"]
+]);
 
 async function IsUdpPortInUse(Port: number){
     return await new Promise<boolean>((resolve) => {
@@ -276,7 +329,7 @@ async function WaitForGameserverReady(StartedProcess: StartedGameserverProcess, 
     const StartupFailurePromise = StartedProcess.child != undefined
         ? new Promise<never>((_, reject) => {
             StartedProcess.child!.once("exit", (Code, Signal) => {
-                reject(new Error(`Gameserver on port ${Port} stopped during startup: exit code ${Code ?? "null"} signal ${Signal ?? "null"}`));
+                reject(new Error(`Gameserver on port ${Port} stopped during startup: ${DescribeProcessExit({code: Code, signal: Signal})}`));
             });
 
             StartedProcess.child!.once("error", (SpawnError) => {
@@ -316,12 +369,10 @@ function TransformExpectedPlayerArgs(ExpectedPlayers: ExpectedPlayer[]){
 
 async function StartGameserverProcess(Args: string[]): Promise<StartedGameserverProcess>{
     const Child = spawn(GAMESERVER_BINARY_PATH, Args, {
-        detached: true,
+        detached: false,
         stdio: "ignore",
         windowsHide: false
     });
-
-    Child.unref();
 
     return {
         processId: Child.pid!,
@@ -508,7 +559,7 @@ async function StartServer(Options: StartServerOptions){
     };
 
     StartedProcess.child?.on("exit", (Code, Signal) => {
-        const ExitMessage = `Gameserver process ${StartedProcess.processId} on port ${Port} exited with code ${Code ?? "null"} signal ${Signal ?? "null"}`;
+        const ExitMessage = `Gameserver process ${StartedProcess.processId} on port ${Port} exited: ${DescribeProcessExit({code: Code, signal: Signal})}`;
 
         if(NewGameserver.expectedShutdownReason != undefined){
             logger.info(`${ExitMessage} after expected shutdown: ${NewGameserver.expectedShutdownReason}`);
