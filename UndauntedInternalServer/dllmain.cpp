@@ -16,6 +16,7 @@
 #include "MinHook/MinHook.h"
 #include "constants.h"
 #include "Networking.h"
+#include "Hooks/NativeNameCleanup.h"
 
 #include "SDK/GameplayAbilities_parameters.hpp"
 #include "SDK/Archon_parameters.hpp"
@@ -24,8 +25,8 @@
 using namespace SDK;
 
 namespace Globals {
-    static bool AmServer = false;
-    static uintptr_t BaseAddress = 0x0;
+    bool AmServer = false;
+    uintptr_t BaseAddress = 0x0;
     bool Listening = false;
     bool DoListen = false;
     const wchar_t* ServerAPIKey = nullptr;
@@ -41,6 +42,10 @@ namespace Globals {
     std::wstring MetagameAddress;
 
     bool EnableLogging = true;
+}
+
+namespace NativeNameCleanupConfig {
+    constexpr bool kEnableNativeNameCleanup = true;
 }
 
 std::map<std::wstring, std::wstring> EndpointMap = {};
@@ -780,6 +785,10 @@ void InitClientHooks() {
     //MH_CreateHook((void*)(Globals::BaseAddress + 0x347E110), IsNetReadyHook, &OrigIsNetReady);
 
     //MH_EnableHook((void*)(Globals::BaseAddress + 0x347E110));
+
+    if constexpr (NativeNameCleanupConfig::kEnableNativeNameCleanup) {
+        NativeNameCleanup::Init();
+    }
 
     //MH_CreateHook((void*)(Globals::BaseAddress + 0x1F61820), ProcessEventClientHook, &OrigProcessEventClient);
 

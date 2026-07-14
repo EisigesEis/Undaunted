@@ -139,10 +139,12 @@
   <ItemGroup>
     <ClInclude Include="constants.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Hooks\NativeNameCleanup.h" />
     <ClInclude Include="Networking.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="Hooks\NativeNameCleanup.cpp" />
     <ClCompile Include="MinHook\buffer.c" />
     <ClCompile Include="MinHook\hde\hde32.c" />
     <ClCompile Include="MinHook\hde\hde64.c" />

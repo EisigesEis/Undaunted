@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -19,6 +19,9 @@
     <Filter Include="SDK">
       <UniqueIdentifier>{f7171c16-3dd7-48b5-89e7-59c77c468888}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Hooks">
+      <UniqueIdentifier>{9a090ef4-0728-4a45-9c7c-7044347405c6}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -29,6 +32,9 @@
     </ClInclude>
     <ClInclude Include="Networking.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Hooks\NativeNameCleanup.h">
+      <Filter>Hooks</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -61,6 +67,9 @@
     </ClCompile>
     <ClCompile Include="Networking.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Hooks\NativeNameCleanup.cpp">
+      <Filter>Hooks</Filter>
     </ClCompile>
     <ClCompile Include="SDK\Archon_functions.cpp">
       <Filter>SDK</Filter>
