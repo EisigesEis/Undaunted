@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { SignMetagameJWTForUid } from "../controllers/auth";
 import { BuildFriendPayload, BuildPresenceResult } from "../controllers/friends";
 import { RememberUsernameForUserId } from "../controllers/login";
+import { AcceptPartyInvite, CreatePartyInvite, KickPartyMember, GetOrCreatePartyForPlayer, ResetPartyStateForTests } from "../controllers/party";
 import { AttachXmppServer } from "./server";
 
 /**
@@ -40,13 +41,18 @@ async function main() {
     RememberUsernameForUserId("alice", "Alice");
     RememberUsernameForUserId("bob", "Bob");
     RememberUsernameForUserId("eve", "Eve");
+    RememberUsernameForUserId("UID-generated-local-user", "UID-generated-local-user");
+    ResetPartyStateForTests();
+    const TestParty = await GetOrCreatePartyForPlayer("alice", "682486_2.1.1_shipping");
+    await CreatePartyInvite("alice", "bob", "682486_2.1.1_shipping");
+    await AcceptPartyInvite("bob", "alice");
     const AliceResource = "V2:JackalDev:WIN::ALICE";
     const BobResource = "V2:JackalDev:WIN::BOB";
     const EveResource = "V2:JackalDev:WIN::EVE";
     const Alice = await connectBoundClient(`${BaseUrl}/xmpp`, "alice", AliceResource);
     const Bob = await connectBoundClient(`${BaseUrl}/xmpp`, "bob", BobResource);
     const Eve = await connectBoundClient(`${BaseUrl}/xmpp`, "eve", EveResource);
-    const Room = "Party-test_NjgyNDg2XzIuMS4xX3NoaXBwaW5n@muc.prod.ol.epicgames.com";
+    const Room = `Party-${TestParty.partyId}@muc.prod.ol.epicgames.com`;
     const OtherRoom = "Hunt-other@muc.prod.ol.epicgames.com";
     const AliceNick = roomNick("Alice", "alice", AliceResource);
     const BobNick = roomNick("Bob", "bob", BobResource);
@@ -90,6 +96,12 @@ async function main() {
     await delay(50);
     assert(!Eve.messages.some((Message) => Message.includes('id="group-room-only"') && Message.includes("Room only")), "groupchat should not leak to different rooms");
 
+    Eve.ws.send(`<presence to="${Room}/${EveNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
+    await Eve.waitFor((Message) => Message.includes(Room) && Message.includes('type="unavailable"'), "eve denied party room join");
+    Eve.ws.send(`<message type="groupchat" id="party-denied" to="${Room}"><body>Denied party hello</body></message>`);
+    await delay(50);
+    assert(!Alice.messages.some((Message) => Message.includes('id="party-denied"')), "non-member party groupchat should not reach party members");
+
     const AliceCityRoom = "City-alice@muc.127.0.0.1:9000";
     const BobCityRoom = "City-bob@muc.127.0.0.1:9000";
     Alice.ws.send(`<presence to="${AliceCityRoom}/${AliceNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
@@ -105,7 +117,7 @@ async function main() {
     await delay(50);
     assert(!Eve.messages.some((Message) => Message.includes('id="city-cross-room"') && Message.includes("City hello")), "city groupchat should not leak outside city rooms");
 
-    const InvalidNickRoom = "Party-invalid@muc.prod.ol.epicgames.com";
+    const InvalidNickRoom = "Hunt-invalid@muc.prod.ol.epicgames.com";
     Alice.ws.send(`<presence to="${InvalidNickRoom}/InvalidMCPUser:alice:${AliceResource}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
     const InvalidNickAck = await Alice.waitFor((Message) => Message.includes(InvalidNickRoom) && Message.includes('status code="110"'), "invalid nick room join ack");
     assert(!InvalidNickAck.includes("InvalidMCPUser"), "invalid MCP room nick should be canonicalized on join");
@@ -115,7 +127,8 @@ async function main() {
 
     process.env.LOCAL_USER_ID = "local-display-user";
     RememberUsernameForUserId("local-display-user", "Local Slayer");
-    RememberUsernameForUserId("UID-generated-local-user", "UID-generated-local-user");
+    await CreatePartyInvite("alice", "UID-generated-local-user", "682486_2.1.1_shipping");
+    await AcceptPartyInvite("UID-generated-local-user", "alice");
     const LocalResource = "V2:JackalDev:WIN::LOCAL";
     const Local = await connectBoundClient(`${BaseUrl}/xmpp`, "UID-generated-local-user", LocalResource);
     const LocalNick = roomNick("Local Slayer", "UID-generated-local-user", LocalResource);
@@ -127,6 +140,12 @@ async function main() {
 
     Local.ws.send(`<message type="groupchat" id="group-local" to="${Room}"><body>Local hello</body></message>`);
     await Bob.waitFor((Message) => Message.includes('type="groupchat"') && Message.includes(`from="${Room}/${CanonicalLocalNick}"`) && Message.includes("Local hello"), "local generated user requested nick delivery");
+
+    KickPartyMember("alice", "bob");
+    await Bob.waitFor((Message) => Message.includes(Room) && Message.includes('type="unavailable"'), "bob kicked from party room");
+    Alice.ws.send(`<message type="groupchat" id="party-after-kick" to="${Room}"><body>After kick</body></message>`);
+    await delay(50);
+    assert(!Bob.messages.some((Message) => Message.includes('id="party-after-kick"')), "kicked party member should not receive later party messages");
 
     Alice.ws.send(`<message type="chat" id="private-1" to="bob@prod.ol.epicgames.com"><body>Hello Bob</body></message>`);
     await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "bob private delivery");

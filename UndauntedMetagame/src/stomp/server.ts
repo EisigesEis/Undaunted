@@ -283,6 +283,7 @@ async function HandleSubscribe(session: StompSession, frame: StompFrame) {
         id: Id,
         destination: Destination
     });
+    logger.debug({ userId: session.userId, destination: Destination, subscriptionId: Id }, "STOMP subscription added");
     LogProtocol("stomp", "subscription.added", { userId: session.userId, destination: Destination, subscriptionId: Id, subscriptionCount: session.subscriptions.size });
     SendReceiptIfRequested(session, frame);
 

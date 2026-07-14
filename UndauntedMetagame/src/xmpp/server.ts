@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
 import { BuildPresenceResult, GetSocialFriendUserIds } from "../controllers/friends";
 import { GetDisplayUsernameForUserId } from "../controllers/login";
+import { AddPartyEventListener, IsPlayerInPartyRoom } from "../controllers/party";
 import { AddSocialEventListener, RegisterSocialSession, TouchSocialSession, UnregisterSocialSession, UpdateSocialPresenceState } from "../controllers/social";
 import { logger } from "../logger";
 import { LogProtocol } from "../protocolLogger";
@@ -134,10 +135,14 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
     const RemoveSocialEventListener = AddSocialEventListener((event) => {
         void BroadcastFriendPresence(event.userId);
     });
+    const RemovePartyEventListener = AddPartyEventListener((event) => {
+        EjectRemovedPartyMembers(event.partyId, event.removedPlayerIds);
+    });
 
     WebsocketServer.on("close", () => {
         clearInterval(Heartbeat);
         RemoveSocialEventListener();
+        RemovePartyEventListener();
     });
 
     logger.info(`XMPP websocket server mounted at ${Path}`);
@@ -609,6 +614,12 @@ function handlePresence(session: XmppSession, node: XmppNode) {
         return;
     }
 
+    if (!CanAccessRoom(session, Room)) {
+        LogProtocol("xmpp", "room.join.denied", { userId: session.userId, room: Room });
+        sendRoomOccupantUnavailable(session, Room, session, Nick, true);
+        return;
+    }
+
     joinRoom(session, Room, Nick);
 }
 
@@ -737,6 +748,11 @@ function handleMessage(session: XmppSession, node: XmppNode) {
 
 function handleGroupMessage(session: XmppSession, node: XmppNode, body: string) {
     const Room = bareJid(node.attrs.to ?? "general");
+    if (!CanAccessRoom(session, Room)) {
+        LogProtocol("xmpp", "message.groupchat.denied", { userId: session.userId, room: Room });
+        return;
+    }
+
     const DeliveryKey = roomDeliveryKey(Room);
     if (!session.rooms.has(Room)) {
         joinRoom(session, Room, epicRoomNick(session));
@@ -860,6 +876,37 @@ function closeSession(session: XmppSession) {
     unindexSession(session);
     Sessions.delete(session);
     LogProtocol("xmpp", "session.disconnected", { userId: session.userId, fullJid: session.fullJid });
+}
+
+function CanAccessRoom(session: XmppSession, room: string) {
+    const PartyId = PartyIdFromRoom(room);
+    if (PartyId == undefined) {
+        return true;
+    }
+
+    return IsPlayerInPartyRoom(session.userId, PartyId);
+}
+
+function PartyIdFromRoom(room: string) {
+    const Node = decodeXmppValue(bareNode(room));
+    const Match = Node.match(/^Party-(.+)$/i);
+    return Match?.[1];
+}
+
+function EjectRemovedPartyMembers(partyId: string, removedPlayerIds: string[]) {
+    const RemovedPlayers = new Set(removedPlayerIds);
+
+    for (const Session of Sessions) {
+        if (!RemovedPlayers.has(Session.userId)) {
+            continue;
+        }
+
+        for (const [Room, Nick] of [...Session.rooms.entries()]) {
+            if (PartyIdFromRoom(Room) === partyId) {
+                leaveRoom(Session, Room, Nick);
+            }
+        }
+    }
 }
 
 function indexSession(session: XmppSession) {

@@ -7,6 +7,8 @@ import { eq } from "drizzle-orm";
 import { GetDisplayUsernameForUserId, GetUsernameForUserId } from "../controllers/login";
 import { BuildCanonicalAccountIdentity } from "../controllers/accountProfile";
 import { BuildLegacyArchonAccountData, BuildLegacyArchonFriendsSave } from "../controllers/friends";
+import { ClearPlayerPartyForFreshLogin } from "../controllers/party";
+import { CancelNonReadyMatchmakingForFreshLogin } from "../controllers/matchmaking";
 
 export const loginRouter = Router();
 
@@ -56,7 +58,23 @@ loginRouter.post("/login", HasUndauntedMetagameAuth, async (req: any, res) => {
         return;
     }
 
-    logger.info(`${req.body.email} is logging in!`);
+    const PartyCleanup = ClearPlayerPartyForFreshLogin(req.AuthData.userId);
+    const MatchmakingCleanup = await CancelNonReadyMatchmakingForFreshLogin(req.AuthData.userId);
+
+    const CleanupLog = {
+        userId: req.AuthData.userId,
+        removedFromParty: PartyCleanup.removedFromParty,
+        partyId: PartyCleanup.partyId,
+        cancelledMatchmaking: MatchmakingCleanup.cancelled,
+        candidateId: MatchmakingCleanup.candidateId,
+        matchmakingPhase: MatchmakingCleanup.phase
+    };
+    if(PartyCleanup.removedFromParty || MatchmakingCleanup.cancelled){
+        logger.info(CleanupLog, "Player login session cleanup");
+    }
+    else{
+        logger.debug(CleanupLog, "Player login session cleanup");
+    }
 
     res.json({
         "error_code": "TicketRateOk",

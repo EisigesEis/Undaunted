@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import crypto from "node:crypto";
 import { UpdatePlayerLocation, UpdatePlayerMatchmakingActivity } from "./undauntedapi";
+import { GetPartyById, GetPartyForPlayer } from "./party";
 
 const MATCHMAKING_MODE = process.env.MATCHMAKING_MODE;
 const DEPLOYSERVER_URL = process.env.DEPLOYSERVER_URL;
@@ -17,6 +18,9 @@ const MATCHMAKING_SESSION_TTL_MS = Number(process.env.MATCHMAKING_SESSION_TTL_SE
 export type MatchmakingPhase = "QUEUED" | "STARTING" | "READY" | "FAILED" | "EXPIRED";
 
 type MatchmakingQueueData = {
+    GameMode: string,
+    GameArgs: string,
+    Groups: string[][],
     Players: string[],
     LastPlayerAddedTime: Date,
     Resolved: boolean
@@ -25,6 +29,9 @@ type MatchmakingQueueData = {
 export type MatchmakingSession = {
     candidateId: string,
     userId: string,
+    playerIds: string[],
+    partyId: string | undefined,
+    privateMatch: boolean,
     gameMode: string,
     gameArgs: string,
     huntId: string,
@@ -36,7 +43,8 @@ export type MatchmakingSession = {
     updatedAt: Date,
     readyAt: Date | undefined,
     lastHeartbeatAt: Date | undefined,
-    serverId: string | undefined
+    serverId: string | undefined,
+    cancelled: boolean
 };
 
 type LaunchGameResult = {
@@ -58,19 +66,22 @@ type DeployserverPlayerStatus = {
     }
 };
 
-let MatchmakingQueueMap: Map<string, MatchmakingQueueData> = new Map<string, MatchmakingQueueData>(); // Key is HuntID
+let MatchmakingQueueMap: Map<string, MatchmakingQueueData[]> = new Map<string, MatchmakingQueueData[]>(); // Key is HuntID
 let MatchmakingSessionMap: Map<string, MatchmakingSession> = new Map<string, MatchmakingSession>(); // Key is PlayerID
 
 function HuntIdRequiresMatchmaking(HuntId: string | undefined){
     return HuntId != undefined && !HuntId.includes("Ramsgate") && !HuntId.includes("Dojo");
 }
 
-function CreateMatchmakingSession(PlayerId: string, GameMode: string, GameArgs: string, HuntId: string, Phase: MatchmakingPhase): MatchmakingSession{
+function CreateMatchmakingSession(PlayerId: string, PlayerIds: string[], PartyId: string | undefined, PrivateMatch: boolean, GameMode: string, GameArgs: string, HuntId: string, Phase: MatchmakingPhase): MatchmakingSession{
     const Now = new Date();
 
     return {
         candidateId: crypto.randomUUID(),
         userId: PlayerId,
+        playerIds: [...new Set(PlayerIds)],
+        partyId: PartyId,
+        privateMatch: PrivateMatch,
         gameMode: GameMode,
         gameArgs: GameArgs,
         huntId: HuntId,
@@ -82,25 +93,28 @@ function CreateMatchmakingSession(PlayerId: string, GameMode: string, GameArgs: 
         updatedAt: Now,
         readyAt: undefined,
         lastHeartbeatAt: undefined,
-        serverId: undefined
+        serverId: undefined,
+        cancelled: false
     };
 }
 
 async function SyncMatchmakingActivity(Session: MatchmakingSession){
-    await UpdatePlayerMatchmakingActivity(Session.userId, {
-        CandidateId: Session.candidateId,
-        GameMode: Session.gameMode,
-        HuntId: Session.huntId,
-        Phase: Session.phase,
-        StatusReason: Session.statusReason,
-        Host: Session.host || undefined,
-        Port: Session.port || undefined,
-        ServerId: Session.serverId,
-        ReadyTime: Session.readyAt?.getTime()
-    });
+    for(const PlayerId of Session.playerIds){
+        await UpdatePlayerMatchmakingActivity(PlayerId, {
+            CandidateId: Session.candidateId,
+            GameMode: Session.gameMode,
+            HuntId: Session.huntId,
+            Phase: Session.phase,
+            StatusReason: Session.statusReason,
+            Host: Session.host || undefined,
+            Port: Session.port || undefined,
+            ServerId: Session.serverId,
+            ReadyTime: Session.readyAt?.getTime()
+        });
 
-    if(Session.phase === "READY"){
-        await UpdatePlayerLocation(Session.userId, Session.huntId);
+        if(Session.phase === "READY"){
+            await UpdatePlayerLocation(PlayerId, Session.huntId);
+        }
     }
 }
 
@@ -109,6 +123,10 @@ function MarkSessionUpdated(Session: MatchmakingSession){
 }
 
 function MarkSessionReady(Session: MatchmakingSession, GameOnDeployServer: LaunchGameResult){
+    if(Session.cancelled){
+        return;
+    }
+
     Session.host = GameOnDeployServer.host;
     Session.port = GameOnDeployServer.port;
     Session.serverId = GameOnDeployServer.serverId;
@@ -116,33 +134,77 @@ function MarkSessionReady(Session: MatchmakingSession, GameOnDeployServer: Launc
     Session.statusReason = undefined;
     Session.readyAt = new Date();
     MarkSessionUpdated(Session);
+    logger.info({
+        candidateId: Session.candidateId,
+        playerIds: Session.playerIds,
+        partyId: Session.partyId,
+        huntId: Session.huntId,
+        host: Session.host,
+        port: Session.port,
+        serverId: Session.serverId
+    }, "Matchmaking session ready");
 }
 
 function MarkSessionFailed(Session: MatchmakingSession, Reason: string){
+    if(Session.cancelled){
+        return;
+    }
+
     Session.phase = "FAILED";
     Session.statusReason = Reason;
     MarkSessionUpdated(Session);
+    logger.warn({
+        candidateId: Session.candidateId,
+        playerIds: Session.playerIds,
+        partyId: Session.partyId,
+        huntId: Session.huntId,
+        reason: Reason
+    }, "Matchmaking session failed");
 }
 
 function MarkSessionExpired(Session: MatchmakingSession, Reason: string){
+    if(Session.cancelled){
+        return;
+    }
+
     Session.phase = "EXPIRED";
     Session.statusReason = Reason;
     MarkSessionUpdated(Session);
+    logger.info({
+        candidateId: Session.candidateId,
+        playerIds: Session.playerIds,
+        partyId: Session.partyId,
+        huntId: Session.huntId,
+        reason: Reason
+    }, "Matchmaking session expired");
+}
+
+function RegisterSessionForPlayers(Session: MatchmakingSession) {
+    for(const PlayerId of Session.playerIds){
+        MatchmakingSessionMap.set(PlayerId, Session);
+    }
 }
 
 function ExpireStaleSession(Session: MatchmakingSession){
     if(Session.phase === "FAILED" || Session.phase === "EXPIRED"){
-        return;
+        return false;
     }
 
     const LastMeaningfulUpdate = Session.lastHeartbeatAt ?? Session.readyAt ?? Session.updatedAt;
     if(Date.now() - LastMeaningfulUpdate.getTime() > MATCHMAKING_SESSION_TTL_MS){
         MarkSessionExpired(Session, "matchmaking_session_expired");
+        return true;
     }
+
+    return false;
 }
 
 async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined): Promise<LaunchGameResult>{
-    logger.info(`Querying DeployServer for GameMode: ${GameMode} HuntId ${HuntId} with ${ExpectedPlayers?.length} Expected Players!`);
+    logger.info({
+        gameMode: GameMode,
+        huntId: HuntId,
+        expectedPlayers: ExpectedPlayers ?? []
+    }, "Requesting deploy server matchmaking");
 
     const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_MATCHMAKING_PATH;
 
@@ -178,7 +240,12 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
     if(MatchmakingResult.status === 200){
         const MatchmakingData = await MatchmakingResult.json();
 
-        logger.info(`DeployServer returned gameserver ${MatchmakingData.host}:${MatchmakingData.port}`);
+        logger.info({
+            huntId: HuntId,
+            host: MatchmakingData.host,
+            port: MatchmakingData.port,
+            serverId: MatchmakingData.id
+        }, "Deploy server assigned gameserver");
 
         return {
             succeeded: true,
@@ -267,31 +334,35 @@ export async function TouchDeployserverForPlayerActivity(PlayerId: string){
     }
 }
 
-async function PopQueue(HuntId: string){
-    const MatchmakingQueue = MatchmakingQueueMap.get(HuntId);
-
+async function PopQueue(HuntId: string, MatchmakingQueue: MatchmakingQueueData | undefined){
     if(MatchmakingQueue == undefined || MatchmakingQueue.Resolved){
         return;
     }
 
     MatchmakingQueue.Resolved = true;
+    logger.info({
+        huntId: HuntId,
+        gameMode: MatchmakingQueue.GameMode,
+        gameArgs: MatchmakingQueue.GameArgs,
+        groups: MatchmakingQueue.Groups,
+        players: MatchmakingQueue.Players,
+        queueAgeMs: Date.now() - MatchmakingQueue.LastPlayerAddedTime.getTime()
+    }, "Starting matchmaking queue");
 
-    for(const Player of MatchmakingQueue.Players){
-        const Session = MatchmakingSessionMap.get(Player);
-
-        if(Session != undefined){
-            Session.phase = "STARTING";
-            MarkSessionUpdated(Session);
-            await SyncMatchmakingActivity(Session);
+    for(const Session of UniqueSessionsForPlayers(MatchmakingQueue.Players)){
+        if(Session.cancelled){
+            continue;
         }
+
+        Session.phase = "STARTING";
+        MarkSessionUpdated(Session);
+        await SyncMatchmakingActivity(Session);
     }
     
-    const GameOnDeployServer = await LaunchGameOnDeployserver("ISLAND", "", HuntId, MatchmakingQueue.Players);
+    const GameOnDeployServer = await LaunchGameOnDeployserver(MatchmakingQueue.GameMode, MatchmakingQueue.GameArgs, HuntId, MatchmakingQueue.Players);
 
-    for(const Player of MatchmakingQueue.Players){
-        const Session = MatchmakingSessionMap.get(Player);
-
-        if(Session == undefined){
+    for(const Session of UniqueSessionsForPlayers(MatchmakingQueue.Players)){
+        if(Session.cancelled){
             continue;
         }
 
@@ -305,8 +376,15 @@ async function PopQueue(HuntId: string){
         await SyncMatchmakingActivity(Session);
     }
 
-    if(MatchmakingQueueMap.get(HuntId) === MatchmakingQueue){
-        MatchmakingQueueMap.delete(HuntId);
+    const Queues = MatchmakingQueueMap.get(HuntId);
+    if(Queues != undefined){
+        const RemainingQueues = Queues.filter((Queue) => Queue !== MatchmakingQueue);
+        if(RemainingQueues.length === 0){
+            MatchmakingQueueMap.delete(HuntId);
+        }
+        else{
+            MatchmakingQueueMap.set(HuntId, RemainingQueues);
+        }
     }
 }
 
@@ -338,11 +416,57 @@ async function TryReuseReadySession(PlayerId: string, GameMode: string, HuntId: 
         MarkSessionUpdated(ExistingSession);
         await SyncMatchmakingActivity(ExistingSession);
 
+        logger.info({
+            candidateId: ExistingSession.candidateId,
+            playerId: PlayerId,
+            huntId: HuntId,
+            host: ExistingSession.host,
+            port: ExistingSession.port,
+            serverId: ExistingSession.serverId
+        }, "Reusing ready matchmaking session");
+
         return ExistingSession;
     }
 
     MarkSessionExpired(ExistingSession, "assigned_gameserver_not_joinable");
     await SyncMatchmakingActivity(ExistingSession);
+    return undefined;
+}
+
+async function TryReuseActiveSession(PlayerId: string, GameMode: string, GameArgs: string, HuntId: string, PlayerIds: string[], PrivateMatch: boolean) {
+    const ExistingSession = MatchmakingSessionMap.get(PlayerId);
+    if(ExistingSession == undefined){
+        return undefined;
+    }
+
+    ExpireStaleSession(ExistingSession);
+
+    const SameRequest =
+        ExistingSession.gameMode === GameMode
+        && ExistingSession.gameArgs === GameArgs
+        && ExistingSession.huntId === HuntId
+        && ExistingSession.privateMatch === PrivateMatch
+        && SamePlayerSet(ExistingSession.playerIds, PlayerIds);
+
+    if(SameRequest && (ExistingSession.phase === "QUEUED" || ExistingSession.phase === "STARTING")){
+        logger.debug({
+            candidateId: ExistingSession.candidateId,
+            playerId: PlayerId,
+            phase: ExistingSession.phase,
+            huntId: HuntId,
+            playerIds: ExistingSession.playerIds
+        }, "Reusing active matchmaking session");
+        return ExistingSession;
+    }
+
+    if(SameRequest && ExistingSession.phase === "READY"){
+        return await TryReuseReadySession(PlayerId, GameMode, HuntId);
+    }
+
+    if(ExistingSession.phase !== "FAILED" && ExistingSession.phase !== "EXPIRED"){
+        RemoveSession(ExistingSession, SameRequest ? "active_session_not_reusable" : "replaced_by_new_matchmaking_request");
+    }
+
     return undefined;
 }
 
@@ -353,67 +477,231 @@ export async function CheckAndUpdateQueueStatus(PlayerId: string){
         return undefined;
     }
 
-    ExpireStaleSession(Session);
-
-    if(Session.phase === "QUEUED" || Session.phase === "STARTING"){
-        const MatchmakingQueue = MatchmakingQueueMap.get(Session.huntId);
-
-        if(MatchmakingQueue != undefined && (new Date()).getTime() - MatchmakingQueue.LastPlayerAddedTime.getTime() > MATCHMAKING_QUEUE_WAIT_MS){
-            await PopQueue(Session.huntId);
-        }
+    const Expired = ExpireStaleSession(Session);
+    if(Expired){
+        await SyncMatchmakingActivity(Session);
+        return Session;
     }
 
-    await SyncMatchmakingActivity(Session);
+    if(Session.phase === "QUEUED" || Session.phase === "STARTING"){
+        const MatchmakingQueue = FindQueueForPlayer(Session.huntId, PlayerId);
+
+        if(MatchmakingQueue != undefined){
+            const QueueAgeMs = Date.now() - MatchmakingQueue.LastPlayerAddedTime.getTime();
+            if(QueueAgeMs > MATCHMAKING_QUEUE_WAIT_MS){
+                logger.info({
+                    candidateId: Session.candidateId,
+                    playerId: PlayerId,
+                    huntId: Session.huntId,
+                    phase: Session.phase,
+                    queueAgeMs: QueueAgeMs,
+                    waitMs: MATCHMAKING_QUEUE_WAIT_MS
+                }, "Matchmaking queue wait elapsed");
+                await PopQueue(Session.huntId, MatchmakingQueue);
+                return Session;
+            }
+            else{
+                logger.debug({
+                    candidateId: Session.candidateId,
+                    playerId: PlayerId,
+                    huntId: Session.huntId,
+                    phase: Session.phase,
+                    queueAgeMs: QueueAgeMs,
+                    waitMs: MATCHMAKING_QUEUE_WAIT_MS
+                }, "Matchmaking queue still waiting");
+            }
+        }
+    }
 
     return Session;
 }
 
-function CreateQueue(HuntId: string, PlayerId: string){
+export async function CancelNonReadyMatchmakingForFreshLogin(PlayerId: string) {
+    const Session = MatchmakingSessionMap.get(PlayerId);
+    if(Session == undefined || Session.phase === "READY" || Session.phase === "FAILED" || Session.phase === "EXPIRED"){
+        return {
+            cancelled: false,
+            phase: Session?.phase,
+            candidateId: Session?.candidateId,
+            playerIds: Session?.playerIds ?? []
+        };
+    }
+
+    const CancelledSession = {
+        candidateId: Session.candidateId,
+        phase: Session.phase,
+        playerIds: [...Session.playerIds]
+    };
+
+    MarkSessionExpired(Session, "fresh_login_cleanup");
+    await SyncMatchmakingActivity(Session);
+    RemoveSession(Session, "fresh_login_cleanup");
+
+    return {
+        cancelled: true,
+        ...CancelledSession
+    };
+}
+
+function RemoveSession(Session: MatchmakingSession, Reason: string) {
+    Session.cancelled = true;
+    RemoveSessionFromQueues(Session, Reason);
+
+    for(const PlayerId of Session.playerIds){
+        if(MatchmakingSessionMap.get(PlayerId) === Session){
+            MatchmakingSessionMap.delete(PlayerId);
+        }
+    }
+
+    logger.info({
+        candidateId: Session.candidateId,
+        playerIds: Session.playerIds,
+        huntId: Session.huntId,
+        phase: Session.phase,
+        reason: Reason
+    }, "Removed matchmaking session");
+}
+
+function RemoveSessionFromQueues(Session: MatchmakingSession, Reason: string) {
+    const Queues = MatchmakingQueueMap.get(Session.huntId);
+    if(Queues == undefined){
+        return;
+    }
+
+    let RemovedGroup = false;
+    const RemainingQueues = Queues.map((Queue) => {
+        const Groups = Queue.Groups.filter((Group) => !SamePlayerSet(Group, Session.playerIds));
+        RemovedGroup ||= Groups.length !== Queue.Groups.length;
+
+        return {
+            ...Queue,
+            Groups: Groups,
+            Players: Groups.flat()
+        };
+    }).filter((Queue) => Queue.Groups.length > 0);
+
+    if(!RemovedGroup){
+        return;
+    }
+
+    if(RemainingQueues.length === 0){
+        MatchmakingQueueMap.delete(Session.huntId);
+    }
+    else{
+        MatchmakingQueueMap.set(Session.huntId, RemainingQueues);
+    }
+
+    logger.info({
+        candidateId: Session.candidateId,
+        huntId: Session.huntId,
+        playerIds: Session.playerIds,
+        reason: Reason
+    }, "Removed matchmaking session from queue");
+}
+
+function ResolveMatchmakingGroup(PlayerId: string, RequestedPartyId: string | undefined) {
+    const RequestedParty = GetPartyById(RequestedPartyId);
+    const Party = RequestedParty?.members.has(PlayerId) === true
+        ? RequestedParty
+        : GetPartyForPlayer(PlayerId);
+
+    if(Party == undefined){
+        return {
+            partyId: undefined,
+            playerIds: [PlayerId]
+        };
+    }
+
+    return {
+        partyId: Party.partyId,
+        playerIds: [...Party.members.keys()]
+    };
+}
+
+function FindQueueForPlayer(HuntId: string, PlayerId: string) {
+    return MatchmakingQueueMap.get(HuntId)?.find((Queue) => Queue.Players.includes(PlayerId));
+}
+
+function FindJoinableQueue(HuntId: string, GameMode: string, GameArgs: string, GroupSize: number) {
+    return MatchmakingQueueMap.get(HuntId)?.find((Queue) =>
+        !Queue.Resolved
+        && Queue.GameMode === GameMode
+        && Queue.GameArgs === GameArgs
+        && Queue.Players.length + GroupSize <= 4);
+}
+
+function CreateQueue(HuntId: string, GameMode: string, GameArgs: string, PlayerIds: string[]){
     const Queue = {
-        Players: [PlayerId],
+        GameMode: GameMode,
+        GameArgs: GameArgs,
+        Groups: [[...PlayerIds]],
+        Players: [...PlayerIds],
         LastPlayerAddedTime: new Date(),
         Resolved: false
     };
 
-    MatchmakingQueueMap.set(HuntId, Queue);
+    const Queues = MatchmakingQueueMap.get(HuntId) ?? [];
+    Queues.push(Queue);
+    MatchmakingQueueMap.set(HuntId, Queues);
+    logger.info({
+        huntId: HuntId,
+        gameMode: GameMode,
+        gameArgs: GameArgs,
+        playerIds: PlayerIds,
+        queueCount: Queues.length
+    }, "Created matchmaking queue");
 
     return Queue;
 }
 
-async function QueuePlayer(HuntId: string, PlayerId: string){
-    const ExistingQueue = MatchmakingQueueMap.get(HuntId);
-
-    const Session = CreateMatchmakingSession(PlayerId, "ISLAND", "", HuntId, "QUEUED");
-    MatchmakingSessionMap.set(PlayerId, Session);
-    let ActiveQueue = ExistingQueue;
-
-    if(ActiveQueue != undefined && ActiveQueue.Resolved){
-        logger.info(`Existing queue for HuntId ${HuntId} is already starting; creating a fresh queue for ${PlayerId}`);
-        ActiveQueue = undefined;
-    }
+async function QueueGroup(HuntId: string, PlayerId: string, PlayerIds: string[], PartyId: string | undefined, GameMode: string, GameArgs: string){
+    const Session = CreateMatchmakingSession(PlayerId, PlayerIds, PartyId, false, GameMode, GameArgs, HuntId, "QUEUED");
+    RegisterSessionForPlayers(Session);
+    let ActiveQueue = FindJoinableQueue(HuntId, GameMode, GameArgs, PlayerIds.length);
 
     if(ActiveQueue != undefined){
-        ActiveQueue.Players.push(PlayerId);
+        ActiveQueue.Groups.push([...PlayerIds]);
+        ActiveQueue.Players.push(...PlayerIds);
         ActiveQueue.LastPlayerAddedTime = new Date();
+        logger.info({
+            huntId: HuntId,
+            gameMode: GameMode,
+            gameArgs: GameArgs,
+            partyId: PartyId,
+            groupPlayerIds: PlayerIds,
+            queuedPlayers: ActiveQueue.Players,
+            groupCount: ActiveQueue.Groups.length
+        }, "Added group to matchmaking queue");
 
         if(ActiveQueue.Players.length >= 4 || MATCHMAKING_QUEUE_WAIT_MS <= 0){
-            await PopQueue(HuntId);
+            await PopQueue(HuntId, ActiveQueue);
         }
     }
     else{
-        CreateQueue(HuntId, PlayerId);
+        ActiveQueue = CreateQueue(HuntId, GameMode, GameArgs, PlayerIds);
 
         if(MATCHMAKING_QUEUE_WAIT_MS <= 0){
-            await PopQueue(HuntId);
+            await PopQueue(HuntId, ActiveQueue);
         }
     }
 
     await SyncMatchmakingActivity(Session);
+    logger.info({
+        candidateId: Session.candidateId,
+        userId: PlayerId,
+        partyId: PartyId,
+        playerIds: PlayerIds,
+        huntId: HuntId,
+        phase: Session.phase
+    }, "Queued matchmaking group");
 
     return Session;
 }
 
-export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string, HuntId: string, PlayerId: string){
+export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string, HuntId: string, PlayerId: string, Options: {
+    partyId?: string;
+    privateMatch?: boolean;
+} = {}){
     if(MATCHMAKING_MODE === "DISABLED"){
         logger.warn("Matchmaking is disabled, refusing MM!");
 
@@ -428,19 +716,41 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
 
     const NormalizedHuntId = HuntId ?? "";
     const NormalizedGameArgs = GameArgs ?? "";
-    const ReusableSession = await TryReuseReadySession(PlayerId, GameMode, NormalizedHuntId);
+    const Group = ResolveMatchmakingGroup(PlayerId, Options.partyId);
+    logger.info({
+        userId: PlayerId,
+        partyId: Group.partyId,
+        requestedPartyId: Options.partyId,
+        playerIds: Group.playerIds,
+        gameMode: GameMode,
+        huntId: NormalizedHuntId,
+        privateMatch: Options.privateMatch === true
+    }, "Handling matchmaking join");
+    const PrivateMatch = Options.privateMatch === true;
+    const ReusableSession = await TryReuseActiveSession(PlayerId, GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds, PrivateMatch);
 
     if(ReusableSession != undefined){
-        logger.info(`Reusing ready matchmaking session ${ReusableSession.candidateId} for ${PlayerId}`);
         return ReusableSession;
     }
 
-    if(!HuntIdRequiresMatchmaking(NormalizedHuntId)){
-        const Session = CreateMatchmakingSession(PlayerId, GameMode, NormalizedGameArgs, NormalizedHuntId, "STARTING");
-        MatchmakingSessionMap.set(PlayerId, Session);
+    if(PrivateMatch || !HuntIdRequiresMatchmaking(NormalizedHuntId)){
+        const Session = CreateMatchmakingSession(PlayerId, Group.playerIds, Group.partyId, PrivateMatch, GameMode, NormalizedGameArgs, NormalizedHuntId, "STARTING");
+        RegisterSessionForPlayers(Session);
+        logger.info({
+            candidateId: Session.candidateId,
+            userId: PlayerId,
+            partyId: Group.partyId,
+            playerIds: Group.playerIds,
+            huntId: NormalizedHuntId,
+            privateMatch: PrivateMatch
+        }, "Starting direct matchmaking session");
         await SyncMatchmakingActivity(Session);
 
-        const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, NormalizedGameArgs, NormalizedHuntId, [PlayerId]);
+        const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds);
+
+        if(Session.cancelled){
+            return undefined;
+        }
 
         if(GameOnDeployServer.succeeded){
             MarkSessionReady(Session, GameOnDeployServer);
@@ -454,7 +764,7 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
         return GameOnDeployServer.succeeded ? Session : undefined;
     }
 
-    return await QueuePlayer(NormalizedHuntId, PlayerId);
+    return await QueueGroup(NormalizedHuntId, PlayerId, Group.playerIds, Group.partyId, GameMode, NormalizedGameArgs);
 }
 
 export async function MarkMatchmakingHeartbeat(PlayerId: string){
@@ -469,10 +779,105 @@ export async function MarkMatchmakingHeartbeat(PlayerId: string){
     await SyncMatchmakingActivity(Session);
 }
 
+export function BuildCandidateStatusResponse(Session: MatchmakingSession, statusPeriodMillis: number, buildId: string) {
+    const ResponseBody: any = {
+        candidateId: Session.candidateId,
+        candidateStatusPeriodMillis: statusPeriodMillis,
+        gameMode: Session.gameMode,
+        huntId: Session.huntId,
+        playerStates: Object.fromEntries(Session.playerIds.map((PlayerId) => [PlayerId, {}])),
+        status: CandidateStatusForPhase(Session.phase),
+        statusDuration: 0.0,
+        statusReason: Session.statusReason ?? null
+    };
+
+    if(Session.phase === "READY"){
+        ResponseBody.serverInfo = {
+            buildId: buildId,
+            gameSessionId: Session.candidateId,
+            host: Session.host,
+            port: Session.port
+        };
+    }
+
+    return ResponseBody;
+}
+
+export function GetPartyCandidateView(PlayerId: string) {
+    const Session = MatchmakingSessionMap.get(PlayerId);
+    if(Session == undefined || Session.phase === "FAILED" || Session.phase === "EXPIRED"){
+        return undefined;
+    }
+
+    return {
+        candidateId: Session.candidateId,
+        candidateState: PartyCandidateStateForPhase(Session.phase),
+        gauntletLevel: null,
+        playerHuntId: Session.huntId || null,
+        activePlayerIds: Session.playerIds
+    };
+}
+
+function CandidateStatusForPhase(Phase: MatchmakingPhase) {
+    if(Phase === "READY"){
+        return "IN_PROGRESS";
+    }
+
+    if(Phase === "QUEUED"){
+        return "QUEUED_FOR_START";
+    }
+
+    if(Phase === "STARTING"){
+        return "MATCHING";
+    }
+
+    return "FAILED";
+}
+
+function PartyCandidateStateForPhase(Phase: MatchmakingPhase) {
+    if(Phase === "READY"){
+        return "IN_PROGRESS";
+    }
+
+    if(Phase === "QUEUED"){
+        return "QUEUED_FOR_START";
+    }
+
+    if(Phase === "STARTING"){
+        return "MATCHING";
+    }
+
+    return null;
+}
+
+function UniqueSessionsForPlayers(PlayerIds: string[]) {
+    const Sessions = new Set<MatchmakingSession>();
+    for(const PlayerId of PlayerIds){
+        const Session = MatchmakingSessionMap.get(PlayerId);
+        if(Session != undefined){
+            Sessions.add(Session);
+        }
+    }
+
+    return Sessions;
+}
+
+function SamePlayerSet(A: string[], B: string[]) {
+    if(A.length !== B.length){
+        return false;
+    }
+
+    const Players = new Set(A);
+    return B.every((PlayerId) => Players.has(PlayerId));
+}
+
 function SerializeSession(Session: MatchmakingSession){
     return {
         candidateId: Session.candidateId,
         userId: Session.userId,
+        playerIds: Session.playerIds,
+        partyId: Session.partyId,
+        privateMatch: Session.privateMatch,
         gameMode: Session.gameMode,
         huntId: Session.huntId,
         host: Session.host || undefined,
@@ -489,12 +894,15 @@ function SerializeSession(Session: MatchmakingSession){
 
 export function GetMatchmakingDebugData(){
     return {
-        sessions: [...MatchmakingSessionMap.values()].map(SerializeSession),
-        queues: [...MatchmakingQueueMap.entries()].map(([HuntId, Queue]) => ({
+        sessions: [...new Map([...MatchmakingSessionMap.values()].map((Session) => [Session.candidateId, Session])).values()].map(SerializeSession),
+        queues: [...MatchmakingQueueMap.entries()].flatMap(([HuntId, Queues]) => Queues.map((Queue) => ({
             huntId: HuntId,
+            gameMode: Queue.GameMode,
+            gameArgs: Queue.GameArgs,
+            groups: Queue.Groups,
             players: Queue.Players,
             lastPlayerAddedTime: Queue.LastPlayerAddedTime.toISOString(),
             resolved: Queue.Resolved
-        }))
+        })))
     };
 }
