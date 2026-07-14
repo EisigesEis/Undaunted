@@ -20,7 +20,6 @@
 
 #include "SDK/GameplayAbilities_parameters.hpp"
 #include "SDK/Archon_parameters.hpp"
-#include "SDK/lantern_equipped_ab_parameters.hpp"
 
 using namespace SDK;
 
@@ -44,11 +43,23 @@ namespace Globals {
     bool EnableLogging = true;
 }
 
-namespace NativeNameCleanupConfig {
+namespace ClientHookConfig {
     constexpr bool kEnableNativeNameCleanup = true;
 }
 
 std::map<std::wstring, std::wstring> EndpointMap = {};
+
+std::wstring FindClientMetagameAddress(wchar_t** Args, int NumArgs) {
+    for (int Index = 1; Index < NumArgs; ++Index) {
+        if (!Args[Index] || Args[Index][0] == L'\0' || Args[Index][0] == L'-')
+            continue;
+
+        return Args[Index];
+    }
+
+    return L"";
+}
+
 void EvalEndpointMap() {
     static bool DidEvalEndpointMap = false;
 
@@ -172,7 +183,7 @@ void EvalEndpointMap() {
         {L"EntitlementsEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementsv2"},
         {L"GrantEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementv2/{accountid}"},
         {L"RevokeEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlement/{accountid}/{entitlement}"},
-        {L"ServiceSessionEndpoint", L"http://" + Globals::MetagameAddress + L"/ws/{accountid}"},
+        {L"ServiceSessionEndpoint", L"ws://" + Globals::MetagameAddress + L"/ws/{accountid}"},
         {L"QueryUserPresenceEndpoint", L"http://" + Globals::MetagameAddress + L"/present/{accountid}"},
         {L"MatchmakingEndpoint", L"http://" + Globals::MetagameAddress},
         {L"TrackingEndpoint", L"http://" + Globals::MetagameAddress},
@@ -338,12 +349,14 @@ void MainThread() {
 
         UInputSettings::GetDefaultObj()->ConsoleKeys[0].KeyName = UKismetStringLibrary::Conv_StringToName(L"F2");
 
-        UObject* NewObject = UGameplayStatics::SpawnObject(Engine->ConsoleClass, Engine->GameViewport);
+        if (Engine && Engine->GameViewport && Engine->ConsoleClass) {
+            UObject* NewObject = UGameplayStatics::SpawnObject(Engine->ConsoleClass, Engine->GameViewport);
 
-        Engine->GameViewport->ViewportConsole = static_cast<UConsole*>(NewObject);
+            Engine->GameViewport->ViewportConsole = static_cast<UConsole*>(NewObject);
 
-        if (Globals::EnableLogging)
-        std::cout << "Spawned UConsole!" << std::endl;
+            if (Globals::EnableLogging)
+            std::cout << "Spawned UConsole!" << std::endl;
+        }
     }
     else {
         if (Globals::EnableLogging)
@@ -711,6 +724,9 @@ void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
 void* OrigConfigCacheIniGetString = nullptr;
 
 bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_t* Key, FString* Value, FString* Filename) {
+    if (Globals::MetagameAddress.empty())
+        return reinterpret_cast<bool(*)(void* a1, const wchar_t* Section, const wchar_t* Key, FString * Value, FString * Filename)>(OrigConfigCacheIniGetString)(a1, Section, Key, Value, Filename);
+
     EvalEndpointMap();
 
     if (EndpointMap.contains(Key)) {
@@ -719,14 +735,19 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
         return true;
     }
 
-    if (std::wstring(Section).contains(L"Mcp")) {
-        if (std::wstring(Key).contains(L"protocol") || std::wstring(Key).contains(L"Protocol")) {
-            *Value = FString(L"http");
+    const std::wstring SectionName = Section != nullptr ? std::wstring(Section) : L"";
+    const std::wstring KeyName = Key != nullptr ? std::wstring(Key) : L"";
+
+    if (SectionName.contains(L"Mcp")) {
+        const bool IsStompSection = SectionName.contains(L"StompServiceMcp");
+
+        if (KeyName.contains(L"protocol") || KeyName.contains(L"Protocol")) {
+            *Value = FString(IsStompSection ? L"ws" : L"http");
 
             return true;
         }
         
-        if (std::wstring(Key).contains(L"Domain") || std::wstring(Key).contains(L"RedirectUrl")) {
+        if (KeyName.contains(L"Domain")) {
             *Value = FString(Globals::MetagameAddress.c_str());
 
             return true;
@@ -765,9 +786,11 @@ void InitClientHooks() {
 
     MH_EnableHook((void*)(Globals::BaseAddress + 0x1528000));
 
-    MH_CreateHook((void*)(Globals::BaseAddress + 0x1D09D50), ConfigCacheInitGetStringHook, &OrigConfigCacheIniGetString);
+    if (!Globals::MetagameAddress.empty()) {
+        MH_CreateHook((void*)(Globals::BaseAddress + 0x1D09D50), ConfigCacheInitGetStringHook, &OrigConfigCacheIniGetString);
 
-    MH_EnableHook((void*)(Globals::BaseAddress + 0x1D09D50));
+        MH_EnableHook((void*)(Globals::BaseAddress + 0x1D09D50));
+    }
 
     MH_CreateHook((void*)(Globals::BaseAddress + 0x14F2A30), GetEscalationSeason, &OrigGetEscalationSeason);
 
@@ -786,7 +809,7 @@ void InitClientHooks() {
 
     //MH_EnableHook((void*)(Globals::BaseAddress + 0x347E110));
 
-    if constexpr (NativeNameCleanupConfig::kEnableNativeNameCleanup) {
+    if constexpr (ClientHookConfig::kEnableNativeNameCleanup) {
         NativeNameCleanup::Init();
     }
 
@@ -1066,9 +1089,7 @@ void Init() {
 
         wchar_t** Args = CommandLineToArgvW(GetCommandLineW(), &NumArgs);
 
-        if (NumArgs > 2) {
-            Globals::MetagameAddress = Args[1];
-        }
+        Globals::MetagameAddress = FindClientMetagameAddress(Args, NumArgs);
 
         InitClientHooks();
     }

@@ -8,6 +8,10 @@ export function RememberUsernameForUserId(userId: string, username: string){
     UsernameByUserId.set(userId, username);
 }
 
+export function GetRememberedUsernameForUserId(userId: string){
+    return UsernameByUserId.get(userId);
+}
+
 export async function GetUsernameForUserId(userId: string){
     const CachedUsername = UsernameByUserId.get(userId);
     if(CachedUsername != undefined){

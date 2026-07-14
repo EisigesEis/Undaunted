@@ -5,6 +5,7 @@ import { GetDb } from "./db";
 import { logger } from "./logger";
 import http from "http";
 import { AttachXmppServer } from "./xmpp/server";
+import { AttachStompServer } from "./stomp/server";
 
 const PORT = process.env.PORT;
 
@@ -14,7 +15,8 @@ DrainAndRegisterAPIKeys().then(async () => {
   await DrainAndRegisterUserAPIKeys();
 
   const server = http.createServer(app);
-  AttachXmppServer(server);
+  AttachXmppServer(server, { rejectUnknownPath: false });
+  AttachStompServer(server);
 
   server.listen(PORT, () => {
     logger.info(`Undaunted Metagame on port ${PORT}`);

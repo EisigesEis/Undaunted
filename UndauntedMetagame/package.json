@@ -8,6 +8,7 @@
     "dev": "tsx watch --env-file=.env src/server.ts",
     "build": "tsc",
     "test:xmpp": "tsx src/xmpp/selftest.ts",
+    "test:stomp": "tsx src/stomp/selftest.ts",
     "start": "node --env-file=.env dist/server.js",
     "db:generate": "drizzle-kit generate"
   },

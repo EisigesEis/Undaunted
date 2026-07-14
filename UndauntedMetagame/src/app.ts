@@ -13,6 +13,7 @@ import { partyRouter } from "./routes/party.js";
 import { progressionRouter } from "./routes/progression.js";
 import { loadoutRouter } from "./routes/loadout.js";
 import { undauntedApiRouter } from "./routes/undauntedapi.js";
+import { friendsRouter } from "./routes/friends.js";
 import { escalationRouter } from "./routes/escalation.js";
 
 export const app = express();
@@ -33,6 +34,7 @@ app.use("/", matchmakingRouter);
 app.use("/", partyRouter);
 app.use("/", progressionRouter);
 app.use("/", loadoutRouter);
+app.use("/", friendsRouter);
 app.use("/", escalationRouter);
 app.use("/undaunted/api", undauntedApiRouter); // Everything that I/we add to help manage undaunted that doesn't belong to the game proper belongs here
 
