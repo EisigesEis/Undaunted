@@ -1,10 +1,15 @@
-/**
- * TODO:
- * Figure out how game decides social presence in this update.
- * Currently every friend is just shown as offline.
- */
-
 export type SocialSessionSource = "xmpp" | "stomp" | "activity";
+
+export type SocialPresenceState = {
+    status: string;
+    properties: Record<string, unknown>;
+    richPresence: string;
+    bIsPlaying: boolean;
+    bIsJoinable: boolean;
+    bHasVoiceSupport: boolean;
+    sessionId: string;
+    updatedAt: string;
+};
 
 export type SocialEvent = {
     type: "presence.updated" | "friend.updated";
@@ -25,6 +30,7 @@ let NextSocialSessionId = 1;
 
 const Sessions = new Map<string, SocialSession>();
 const OnlineCounts = new Map<string, number>();
+const PresenceStates = new Map<string, SocialPresenceState>();
 const EventListeners = new Set<SocialEventListener>();
 
 export function RegisterSocialSession(userId: string, source: SocialSessionSource) {
@@ -59,6 +65,7 @@ export function UnregisterSocialSession(sessionId: string | undefined) {
 
     if(PreviousCount <= 1){
         OnlineCounts.delete(Session.userId);
+        PresenceStates.delete(Session.userId);
         EmitSocialEvent(BuildSocialEvent("presence.updated", Session.userId, false, Session.source));
     }
     else{
@@ -68,6 +75,23 @@ export function UnregisterSocialSession(sessionId: string | undefined) {
 
 export function IsSocialUserOnline(userId: string) {
     return (OnlineCounts.get(userId) ?? 0) > 0;
+}
+
+export function UpdateSocialPresenceState(userId: string, presence: Omit<SocialPresenceState, "updatedAt">) {
+    const NextPresence: SocialPresenceState = {
+        ...presence,
+        updatedAt: new Date().toISOString()
+    };
+    const PreviousPresence = PresenceStates.get(userId);
+    PresenceStates.set(userId, NextPresence);
+
+    if(PresenceSignature(PreviousPresence) !== PresenceSignature(NextPresence)){
+        EmitSocialEvent(BuildSocialEvent("presence.updated", userId, true, "xmpp"));
+    }
+}
+
+export function GetSocialPresenceState(userId: string) {
+    return PresenceStates.get(userId);
 }
 
 export function AddSocialEventListener(listener: SocialEventListener) {
@@ -92,9 +116,29 @@ export function EmitSocialEvent(event: SocialEvent) {
     }
 }
 
+function PresenceSignature(presence: SocialPresenceState | undefined) {
+    if(presence == undefined){
+        return "";
+    }
+
+    return JSON.stringify({
+        status: presence.status,
+        richPresence: presence.richPresence,
+        bIsPlaying: presence.bIsPlaying,
+        bIsJoinable: presence.bIsJoinable,
+        bHasVoiceSupport: presence.bHasVoiceSupport,
+        sessionId: presence.sessionId,
+        properties: presence.properties
+    });
+}
+
 export function GetSocialDebugState() {
     return {
         sessions: Sessions.size,
-        usersOnline: OnlineCounts.size
+        usersOnline: OnlineCounts.size,
+        presenceStates: [...PresenceStates.entries()].map(([UserId, Presence]) => ({
+            userId: UserId,
+            ...Presence
+        }))
     };
 }

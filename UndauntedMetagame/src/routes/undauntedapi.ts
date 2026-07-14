@@ -4,6 +4,10 @@ import { HasUndauntedUserApiKey } from "../middleware/HasUndauntedUserApiKey";
 import { HasUndauntedAdminApiKey } from "../middleware/HasUndauntedAdminApiKey";
 import { SignMetagameJWTForUid } from "../controllers/auth";
 import { GetMatchmakingDebugData } from "../controllers/matchmaking";
+import { GetSocialFriendUserIds } from "../controllers/friends";
+import { GetSocialDebugState } from "../controllers/social";
+import { GetStompDebugState } from "../stomp/server";
+import { GetXmppDebugState } from "../xmpp/server";
 
 export const undauntedApiRouter = Router();
 
@@ -141,6 +145,17 @@ undauntedApiRouter.get("/PrivateOnlineStats", HasUndauntedAdminApiKey, async (re
         ActivePlayers: PlayerData,
         MatchmakingSessions: MatchmakingData.sessions,
         MatchmakingQueues: MatchmakingData.queues
+    });
+});
+
+// TODO: Debug helper for social presence. Decide if we leave in.
+undauntedApiRouter.get("/SocialDebug", HasUndauntedAdminApiKey, async (req, res) => {
+    res.status(200);
+    res.json({
+        FriendUserIds: GetSocialFriendUserIds(),
+        Social: GetSocialDebugState(),
+        Stomp: GetStompDebugState(),
+        Xmpp: GetXmppDebugState()
     });
 });
 

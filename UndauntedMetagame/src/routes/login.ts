@@ -5,10 +5,12 @@ import { GetDb } from "../db";
 import { users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { GetDisplayUsernameForUserId, GetUsernameForUserId } from "../controllers/login";
+import { BuildCanonicalAccountIdentity } from "../controllers/accountProfile";
+import { BuildLegacyArchonAccountData, BuildLegacyArchonFriendsSave } from "../controllers/friends";
 
 export const loginRouter = Router();
 
-loginRouter.get("/features/platform/win", (req, res) => {
+loginRouter.get("/features/platform/:platform", (req, res) => {
     logger.info("Features");
 
     res.send({
@@ -69,12 +71,18 @@ loginRouter.get("/accountinfo", HasUndauntedMetagameAuth, async (req: any, res) 
     logger.info("Account info")
 
     const Username = await GetUsernameForUserId(req.AuthData.userId);
+    const LegacyData = await BuildLegacyArchonAccountData(req.AuthData.userId);
 
     res.json({
         "accountId" : req.AuthData.userId,
         "creationDate" : "2000-01-01 00:00:00",
+        "createdDate" : "2000-01-01",
+        "data": LegacyData,
         "email" : null,
+        "id": req.AuthData.userId,
+        "name": Username,
         "preferredLanguage" : null,
+        "updateVersion": 0,
         "username" : Username,
         "verified" : true
     });
@@ -114,45 +122,66 @@ loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) =
 loginRouter.post("/accountinfo/public", HasUndauntedMetagameAuth, async (req: any, res) => {
     const AccountIdToLookupFromRequest = req.body.accountId;
 
-    let Username = AccountIdToLookupFromRequest;
-    try {
-        Username = await GetDisplayUsernameForUserId(AccountIdToLookupFromRequest);
-    }
-    catch (error) {
-        logger.warn(error, `Public account lookup fell back to account id for ${AccountIdToLookupFromRequest}`);
-    }
+    const Identity = await BuildCanonicalAccountIdentity(AccountIdToLookupFromRequest);
+    const AuthUserId = typeof req.AuthData?.userId === "string" ? req.AuthData.userId : undefined;
+    const AdditionalSelfIds = AuthUserId != undefined && AuthUserId !== Identity.accountId ? [AuthUserId] : [];
+    const LegacyData = await BuildLegacyArchonAccountData(Identity.accountId, AdditionalSelfIds);
+    const FriendsSave = await BuildLegacyArchonFriendsSave(Identity.accountId, AdditionalSelfIds);
 
     // We allow anybody to look up anybody's username from account id
 
     res.status(200);
     res.json({
-        accountId: AccountIdToLookupFromRequest,
+        accountId: Identity.accountId,
+        catalogDaoId: null,
+        createdDate: "2000-01-01",
+        data: LegacyData,
+        Friends: FriendsSave,
+        id: Identity.accountId,
+        displayName: Identity.displayName,
         isSubscribed: true,
-        language: null,
+        language: Identity.preferredLanguage,
+        lastModifiedDate: "2000-01-01",
         linkedAccounts: [
+            ...Identity.linkedAccounts.map((Account) => ({
+                accountId: Account.accountId,
+                accountType: Account.identityProviderId,
+                displayName: Account.displayName
+            })),
             {
-                accountId: AccountIdToLookupFromRequest,
-                accountType: "epic"
+                accountId: Identity.accountId,
+                accountType: "phoenix",
+                displayName: Identity.displayName
             }
         ],
-        username: Username
+        name: Identity.displayName,
+        updateVersion: 0,
+        username: Identity.displayName
     });
 });
 
-loginRouter.post("/account/mapping", HasUndauntedMetagameAuth, (req: any, res) => {
+loginRouter.post("/account/mapping", HasUndauntedMetagameAuth, async (req: any, res) => {
     const RequestedIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
     const SourceAccountType = typeof req.body?.srcAccountType === "string" ? req.body.srcAccountType : "epic";
     const TargetAccountType = SourceAccountType.toLowerCase() === "phoenix" ? "epic" : "phoenix";
 
-    const AccountMappings = Object.fromEntries(RequestedIds
+    const Entries = await Promise.all(RequestedIds
         .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
-        .map((AccountId) => [
-            AccountId,
-            {
-                accountId: AccountId,
-                accountType: TargetAccountType
-            }
-        ]));
+        .map(async (AccountId) => {
+            const Identity = await BuildCanonicalAccountIdentity(AccountId);
+            return [
+                AccountId,
+                {
+                    accountId: Identity.accountId,
+                    accountType: TargetAccountType,
+                    displayName: Identity.displayName,
+                    username: Identity.displayName,
+                    externalAuthType: TargetAccountType,
+                    externalDisplayName: Identity.displayName
+                }
+            ] as const;
+        }));
+    const AccountMappings = Object.fromEntries(Entries);
 
     logger.info(`Account mapping ${SourceAccountType} -> ${TargetAccountType} for ${Object.keys(AccountMappings).length} account(s)`);
 

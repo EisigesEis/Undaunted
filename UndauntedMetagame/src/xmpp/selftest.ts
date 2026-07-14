@@ -3,6 +3,7 @@ import assert from "assert";
 import http from "http";
 import WebSocket from "ws";
 import { SignMetagameJWTForUid } from "../controllers/auth";
+import { BuildFriendPayload, BuildPresenceResult } from "../controllers/friends";
 import { RememberUsernameForUserId } from "../controllers/login";
 import { AttachXmppServer } from "./server";
 
@@ -18,6 +19,9 @@ type TestClient = {
 };
 
 async function main() {
+    process.env.PROTOCOL_FILE_LOG = "false";
+    process.env.SOCIAL_FRIEND_USER_IDS = "alice,bob";
+
     const server = http.createServer((_req, res) => {
         res.statusCode = 404;
         res.end();
@@ -47,6 +51,26 @@ async function main() {
     const AliceNick = roomNick("Alice", "alice", AliceResource);
     const BobNick = roomNick("Bob", "bob", BobResource);
     const EveNick = roomNick("Eve", "eve", EveResource);
+
+    Alice.ws.send(`<iq type="get" id="roster-alice"><query xmlns="jabber:iq:roster"/></iq>`);
+    const AliceRoster = await Alice.waitFor((Message) => Message.includes('id="roster-alice"') && Message.includes('jabber:iq:roster'), "alice roster result");
+    assert(AliceRoster.includes('jid="bob@prod.ol.epicgames.com"'), "configured friend should be listed in XMPP roster");
+    assert(AliceRoster.includes('name="Bob"'), "configured friend roster item should include display name");
+    assert(AliceRoster.includes('subscription="both"'), "configured friend roster item should be an accepted two-way subscription");
+    const AliceBobPresence = await Alice.waitFor((Message) => Message.includes('from="bob@prod.ol.epicgames.com') && Message.includes("&quot;IsOnline&quot;:true") && Message.includes("&quot;AppId&quot;:&quot;Jackal&quot;"), "alice receives bob direct friend presence");
+    assert(AliceBobPresence.includes("&quot;State&quot;:0"), "direct friend presence should include online Archon state");
+    assert(AliceBobPresence.includes("&quot;PlatformString&quot;:&quot;WIN&quot;"), "direct friend presence should include platform");
+
+    Alice.ws.send(`<presence><status>{"Status":"Dauntless - In the city","bIsPlaying":false,"bIsJoinable":false,"bHasVoiceSupport":false,"SessionId":"","Properties":{"RichPresence_s":"InTheCity","PartyPlayerCountData_i":1}}</status></presence>`);
+    await Alice.waitFor((Message) => Message.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`) && Message.includes(`to="alice@prod.ol.epicgames.com/${AliceResource}"`), "alice self presence ack");
+    const AlicePresence = (await BuildPresenceResult("alice")).payload;
+    assert.strictEqual(AlicePresence.online, true);
+    assert.strictEqual(AlicePresence.status, "online");
+    assert.strictEqual(AlicePresence.richPresence, "Dauntless - In the city");
+    assert.strictEqual((AlicePresence.properties as Record<string, unknown>).RichPresence_s, "InTheCity");
+    const AliceFriend = await BuildFriendPayload("alice");
+    assert.strictEqual(AliceFriend.online, true);
+    assert.strictEqual(AliceFriend.richPresence, "Dauntless - In the city");
 
     Alice.ws.send(`<presence to="${Room}/${AliceNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
     Bob.ws.send(`<presence to="${Room}/${BobNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);

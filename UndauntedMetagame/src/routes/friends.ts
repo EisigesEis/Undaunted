@@ -1,13 +1,112 @@
 import { Router } from "express";
-import { BuildPresenceResult, DoesUserExist, GetAcceptedFriendsForUser, GetFriendForUser, GetSocialFriendUserIds } from "../controllers/friends";
+import { BuildEpicBlockListPayload, BuildEpicFriendsPayload, BuildPresenceResult, DoesUserExist, GetAcceptedFriendsForUser, GetFriendForUser, GetSocialFriendUserIds } from "../controllers/friends";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
+import { UpdateSocialPresenceState } from "../controllers/social";
 
 export const friendsRouter = Router();
 
-friendsRouter.get("/friends/api/public/friends/:accountId", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const AccountId = AuthorizedOwnerAccountId(req, res);
+friendsRouter.get("/epic/friends/v1/:accountId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    const AccountId = AuthorizedAuthenticatedAccountId(req);
     if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
+        return;
+    }
+
+    const AuthUserId = typeof req.AuthData?.userId === "string" ? req.AuthData.userId : undefined;
+    const Payload = await BuildEpicFriendsPayload(AccountId, AuthUserId != undefined && AuthUserId !== AccountId ? [AuthUserId] : []);
+    logger.info({
+        endpoint: "epic.friends",
+        authUserId: req.AuthData?.userId,
+        pathUserId: AccountId,
+        allowlist: GetSocialFriendUserIds(),
+        friends: Payload.friends.map((Friend) => Friend.accountId),
+        responseCount: Payload.friends.length
+    }, "Epic friends response");
+
+    res.json(Payload);
+});
+
+friendsRouter.get("/epic/friends/v1/:accountId/blocklist", HasUndauntedMetagameAuth, (req: any, res) => {
+    const AccountId = AuthorizedAuthenticatedAccountId(req);
+    if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
+        return;
+    }
+
+    const BlockList = BuildEpicBlockListPayload();
+    logger.info({
+        endpoint: "epic.friends.blocklist",
+        authUserId: req.AuthData?.userId,
+        pathUserId: AccountId,
+        responseCount: BlockList.length
+    }, "Epic friends blocklist response");
+
+    res.json(BlockList);
+});
+
+friendsRouter.patch("/epic/presence/v1/:namespace/:accountId/presence/:connectionId", HasUndauntedMetagameAuth, (req: any, res) => {
+    const AccountId = AuthorizedAuthenticatedAccountId(req);
+    if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
+        return;
+    }
+
+    const ActivityValue = typeof req.body?.activity?.value === "string" ? req.body.activity.value : "";
+    const Status = typeof req.body?.status === "string" ? req.body.status : "online";
+    const Props = IsRecord(req.body?.props) ? req.body.props : {};
+    const ConnProps = IsRecord(req.body?.conn?.props) ? req.body.conn.props : {};
+
+    UpdateSocialPresenceState(AccountId, {
+        status: ActivityValue || Status,
+        richPresence: ActivityValue || Status,
+        properties: Props,
+        bIsPlaying: Status === "online",
+        bIsJoinable: Status === "online",
+        bHasVoiceSupport: false,
+        sessionId: typeof Props.EOS_Session === "string" ? Props.EOS_Session : ""
+    });
+
+    logger.info({
+        endpoint: "epic.presence.patch",
+        authUserId: req.AuthData?.userId,
+        pathUserId: AccountId,
+        namespace: req.params.namespace,
+        connectionId: req.params.connectionId,
+        status: Status,
+        activity: ActivityValue
+    }, "Epic presence update response");
+
+    res.json({
+        own: {
+            accountId: AccountId,
+            status: Status,
+            perNs: [
+                {
+                    productId: "prod-jackal",
+                    appId: "fghi4567rNJHv9pNoyczQXo6DDJ6RDeq",
+                    status: Status,
+                    activity: {
+                        value: ActivityValue
+                    },
+                    ns: req.params.namespace,
+                    props: Props,
+                    conns: [
+                        {
+                            id: req.params.connectionId,
+                            props: ConnProps
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+});
+
+friendsRouter.get("/friends/api/public/friends/:accountId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    const AccountId = AuthorizedFriendsReadAccountId(req);
+    if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
         return;
     }
 
@@ -15,8 +114,9 @@ friendsRouter.get("/friends/api/public/friends/:accountId", HasUndauntedMetagame
 });
 
 friendsRouter.get("/friends/api/v1/:accountId/friends", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const AccountId = AuthorizedOwnerAccountId(req, res);
+    const AccountId = AuthorizedFriendsReadAccountId(req);
     if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
         return;
     }
 
@@ -24,12 +124,13 @@ friendsRouter.get("/friends/api/v1/:accountId/friends", HasUndauntedMetagameAuth
 });
 
 friendsRouter.get("/friends/api/v1/:accountId/summary", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const AccountId = AuthorizedOwnerAccountId(req, res);
+    const AccountId = AuthorizedFriendsReadAccountId(req);
     if (AccountId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
         return;
     }
 
-    const Friends = await GetAcceptedFriendsForUser(AccountId);
+    const Friends = await GetAcceptedFriendsForRequest(req, AccountId);
     logger.info({
         endpoint: "friends.summary",
         authUserId: req.AuthData?.userId,
@@ -64,7 +165,8 @@ friendsRouter.get([
     "/friends/api/v1/:accountId/suggested",
     "/friends/api/v1/:accountId/recent/players"
 ], HasUndauntedMetagameAuth, (req: any, res) => {
-    if (AuthorizedOwnerAccountId(req, res) == undefined) {
+    if (AuthorizedFriendsReadAccountId(req) == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
         return;
     }
 
@@ -153,6 +255,10 @@ function ExtractPresenceAccountIds(req: any) {
     return [];
 }
 
+function IsRecord(value: unknown): value is Record<string, any> {
+    return value != undefined && typeof value === "object" && !Array.isArray(value);
+}
+
 friendsRouter.get("/slayerlink/status_good", HasUndauntedMetagameAuth, (req: any, res) => {
     logger.info({
         endpoint: "slayerlink.status_good",
@@ -173,7 +279,7 @@ friendsRouter.get("/slayerlink/status_good", HasUndauntedMetagameAuth, (req: any
     });
 });
 
-friendsRouter.post("/slayerlink/availability", HasUndauntedMetagameAuth, async (req: any, res) => {
+friendsRouter.post("/slayerlink/availability", HasUndauntedMetagameAuth, (req: any, res) => {
     const RequestedAccountIds: string[] = Array.isArray(req.body?.account_ids)
         ? req.body.account_ids.filter((AccountId: unknown): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
         : [];
@@ -256,6 +362,36 @@ function AuthorizedOwnerAccountId(req: any, res: any) {
     return AccountId;
 }
 
+function AuthorizedAuthenticatedAccountId(req: any) {
+    const AccountId = req.params.accountId;
+    const AuthUserId = req.AuthData?.userId;
+
+    if (AuthUserId != undefined && AuthUserId !== AccountId && req.AuthData?.IsGameserver !== true) {
+        logger.info({
+            authUserId: AuthUserId,
+            pathUserId: AccountId
+        }, "Allowing authenticated social access with differing route account ID");
+    }
+
+    return typeof AccountId === "string" && AccountId.length > 0 ? AccountId : undefined;
+}
+
+function AuthorizedFriendsReadAccountId(req: any) {
+    const AccountId = AuthorizedAuthenticatedAccountId(req);
+    if (AccountId == undefined) {
+        return undefined;
+    }
+
+    if (req.AuthData?.userId !== AccountId && req.AuthData?.IsGameserver !== true) {
+        logger.info({
+            authUserId: req.AuthData?.userId,
+            pathUserId: AccountId
+        }, "Allowing authenticated legacy friends read with differing route account ID");
+    }
+
+    return AccountId;
+}
+
 async function SendKnownFriendResponse(accountId: string, friendId: string, res: any) {
     if (!await DoesUserExist(friendId)) {
         res.status(404).json({ error: "unknown_friend" });
@@ -267,7 +403,7 @@ async function SendKnownFriendResponse(accountId: string, friendId: string, res:
 }
 
 async function SendFriendsList(req: any, res: any, accountId: string, endpoint: string) {
-    const Friends = await GetAcceptedFriendsForUser(accountId);
+    const Friends = await GetAcceptedFriendsForRequest(req, accountId);
     logger.info({
         endpoint: `friends.${endpoint}`,
         authUserId: req.AuthData?.userId,
@@ -284,4 +420,9 @@ async function SendFriendsList(req: any, res: any, accountId: string, endpoint: 
     }, "Friends list response");
 
     res.json(Friends);
+}
+
+function GetAcceptedFriendsForRequest(req: any, accountId: string) {
+    const AuthUserId = typeof req.AuthData?.userId === "string" ? req.AuthData.userId : undefined;
+    return GetAcceptedFriendsForUser(accountId, AuthUserId != undefined && AuthUserId !== accountId ? [AuthUserId] : []);
 }

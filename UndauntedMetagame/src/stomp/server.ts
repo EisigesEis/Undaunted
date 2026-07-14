@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
 import { JwtPayload } from "jsonwebtoken";
 import { ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
-import { BuildPresenceResult, GetSocialFriendUserIds } from "../controllers/friends";
+import { BuildPresenceEventPayload, GetSocialFriendUserIds } from "../controllers/friends";
 import { GetDisplayUsernameForUserId } from "../controllers/login";
 import { AddSocialEventListener, BuildSocialEvent, RegisterSocialSession, SocialEvent, TouchSocialSession, UnregisterSocialSession } from "../controllers/social";
 import { logger } from "../logger";
+import { LogProtocol } from "../protocolLogger";
 
 /**
  * TODO:
@@ -72,7 +73,7 @@ export function AttachStompServer(server: http.Server, options: AttachStompServe
             return;
         }
 
-        logger.info({ path: RequestUrl.pathname }, "Accepted STOMP websocket upgrade");
+        LogProtocol("stomp", "upgrade.accepted", { path: RequestUrl.pathname });
         WebsocketServer.handleUpgrade(request, socket, head, (ws) => {
             WebsocketServer.emit("connection", ws, request);
         });
@@ -112,7 +113,7 @@ export function AttachStompServer(server: http.Server, options: AttachStompServe
         const Now = Date.now();
         for (const Session of Sessions) {
             if (Now - Session.lastActivityAt > IdleCloseMs) {
-                logger.info(`STOMP idle timeout for ${Session.userId ?? Session.id}`);
+                LogProtocol("stomp", "session.idle_timeout", { userId: Session.userId, sessionId: Session.id });
                 Session.ws.close(1000, "idle timeout");
                 continue;
             }
@@ -133,6 +134,7 @@ export function AttachStompServer(server: http.Server, options: AttachStompServe
     });
 
     logger.info("STOMP websocket server mounted for non-XMPP upgrades");
+    LogProtocol("stomp", "server.mounted", {});
     return WebsocketServer;
 }
 
@@ -156,7 +158,6 @@ function handleData(session: StompSession, data: string) {
     Touch(session);
 
     if (data === "\n" || data.trim().length === 0) {
-        logger.debug({ userId: session.userId, path: session.requestUrl.pathname }, "STOMP heartbeat");
         return;
     }
 
@@ -170,13 +171,13 @@ function handleData(session: StompSession, data: string) {
             continue;
         }
 
-        logger.debug({
+        LogProtocol("stomp", "frame.received", {
             userId: session.userId,
             path: session.requestUrl.pathname,
             command: Frame.command,
             authenticated: session.authenticated,
             headerKeys: Object.keys(Frame.headers)
-        }, "STOMP frame received");
+        });
 
         HandleFrame(session, Frame);
     }
@@ -262,7 +263,7 @@ async function HandleConnect(session: StompSession, frame: StompFrame) {
     session.authSource = AuthSource;
     session.displayName = await GetDisplayUsernameForUserId(UserId).catch(() => UserId);
     session.socialSessionId = RegisterSocialSession(UserId, "stomp");
-    logger.info({ userId: UserId, path: session.requestUrl.pathname, displayName: session.displayName, authSource: AuthSource, pathAccountId: PathAccountId, headerAccountId: HeaderAccountId }, "STOMP connected");
+    LogProtocol("stomp", "session.connected", { userId: UserId, path: session.requestUrl.pathname, displayName: session.displayName, authSource: AuthSource, pathAccountId: PathAccountId, headerAccountId: HeaderAccountId });
 
     SendFrame(session, {
         command: "CONNECTED",
@@ -282,7 +283,7 @@ async function HandleSubscribe(session: StompSession, frame: StompFrame) {
         id: Id,
         destination: Destination
     });
-    logger.info({ userId: session.userId, destination: Destination, subscriptionId: Id, subscriptionCount: session.subscriptions.size }, "STOMP subscribed");
+    LogProtocol("stomp", "subscription.added", { userId: session.userId, destination: Destination, subscriptionId: Id, subscriptionCount: session.subscriptions.size });
     SendReceiptIfRequested(session, frame);
 
     if (session.userId != undefined) {
@@ -298,12 +299,12 @@ function HandleUnsubscribe(session: StompSession, frame: StompFrame) {
     if (Id != undefined) {
         session.subscriptions.delete(Id);
     }
-    logger.info({ userId: session.userId, subscriptionId: Id, subscriptionCount: session.subscriptions.size }, "STOMP unsubscribed");
+    LogProtocol("stomp", "subscription.removed", { userId: session.userId, subscriptionId: Id, subscriptionCount: session.subscriptions.size });
     SendReceiptIfRequested(session, frame);
 }
 
 function HandleSend(session: StompSession, frame: StompFrame) {
-    logger.info({ userId: session.userId, destination: frame.headers.destination, bodyLength: frame.body.length }, "Compatible STOMP SEND");
+    LogProtocol("stomp", "send.received", { userId: session.userId, destination: frame.headers.destination, bodyLength: frame.body.length });
     if (session.userId == undefined) {
         return;
     }
@@ -342,34 +343,33 @@ async function SendInitialPresenceSnapshots(session: StompSession, subscription:
         ...GetSocialFriendUserIds().filter((UserId) => UserId !== session.userId)
     ];
 
-    logger.info({
+    LogProtocol("stomp", "presence.initial_snapshots", {
         userId: session.userId,
         destination: subscription.destination,
         snapshotUserIds: UserIds
-    }, "STOMP initial presence snapshots");
+    });
 
     for (const UserId of UserIds) {
-        const Presence = await BuildPresenceResult(UserId);
-        SendMessageToSubscription(session, subscription, {
-            ...BuildSocialEvent("presence.updated", UserId, Presence.payload.online, Presence.source === "heartbeat" ? "xmpp" : "stomp"),
-            accountId: UserId,
-            status: Presence.payload.status,
-            onlineStatus: Presence.payload.onlineStatus,
-            presenceStatus: Presence.payload.presenceStatus,
-            availability: Presence.payload.availability,
-            availabilityStatus: Presence.payload.availabilityStatus,
-            connectionStatus: Presence.payload.connectionStatus,
-            richPresence: Presence.payload.richPresence,
-            richPresenceString: Presence.payload.richPresenceString,
-            statusText: Presence.payload.statusText,
-            summary: Presence.payload.summary,
-            source: Presence.source,
-            presence: Presence.payload
-        });
+        SendMessageToSubscription(
+            session,
+            subscription,
+            await BuildPresenceEventPayload(BuildSocialEvent("presence.updated", UserId, false, "stomp"))
+        );
     }
 }
 
 function SendMessageToSubscription(session: StompSession, subscription: StompSubscription, event: SocialEvent | Record<string, any>) {
+    const EventRecord = event as Record<string, any>;
+    LogProtocol("stomp", "message.sent", {
+        sessionUserId: session.userId,
+        eventUserId: typeof EventRecord.userId === "string" ? EventRecord.userId : EventRecord.accountId,
+        destination: subscription.destination,
+        subscriptionId: subscription.id,
+        type: EventRecord.type,
+        richPresence: EventRecord.richPresence,
+        statusText: EventRecord.statusText
+    });
+
     SendFrame(session, {
         command: "MESSAGE",
         headers: {
@@ -383,30 +383,7 @@ function SendMessageToSubscription(session: StompSession, subscription: StompSub
 }
 
 async function EnrichSocialEvent(event: SocialEvent | Record<string, any>) {
-    const EventRecord = event as Record<string, any>;
-    const UserId = typeof event.userId === "string" ? event.userId : typeof EventRecord.accountId === "string" ? EventRecord.accountId : undefined;
-    if (UserId == undefined) {
-        return event;
-    }
-
-    const Presence = await BuildPresenceResult(UserId);
-    return {
-        ...event,
-        accountId: UserId,
-        online: Presence.payload.online,
-        status: Presence.payload.status,
-        onlineStatus: Presence.payload.onlineStatus,
-        presenceStatus: Presence.payload.presenceStatus,
-        availability: Presence.payload.availability,
-        availabilityStatus: Presence.payload.availabilityStatus,
-        connectionStatus: Presence.payload.connectionStatus,
-        richPresence: Presence.payload.richPresence,
-        richPresenceString: Presence.payload.richPresenceString,
-        statusText: Presence.payload.statusText,
-        summary: Presence.payload.summary,
-        source: Presence.source,
-        presence: Presence.payload
-    };
+    return BuildPresenceEventPayload(event as Record<string, any>);
 }
 
 function SendReceiptIfRequested(session: StompSession, frame: StompFrame) {
@@ -495,7 +472,7 @@ function SendErrorAndClose(session: StompSession, message: string, detail: strin
 function CloseSession(session: StompSession, code?: number, reason?: string) {
     UnregisterSocialSession(session.socialSessionId);
     Sessions.delete(session);
-    logger.info({
+    LogProtocol("stomp", "session.disconnected", {
         userId: session.userId,
         path: session.requestUrl.pathname,
         authenticated: session.authenticated,
@@ -503,7 +480,7 @@ function CloseSession(session: StompSession, code?: number, reason?: string) {
         subscriptionCount: session.subscriptions.size,
         closeCode: code,
         closeReason: reason
-    }, "STOMP client disconnected");
+    });
 }
 
 function Touch(session: StompSession) {

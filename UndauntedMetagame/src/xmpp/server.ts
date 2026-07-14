@@ -2,9 +2,11 @@ import http from "http";
 import { SaxesParser, SaxesTagPlain } from "saxes";
 import { WebSocket, WebSocketServer } from "ws";
 import { ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
+import { BuildPresenceResult, GetSocialFriendUserIds } from "../controllers/friends";
 import { GetDisplayUsernameForUserId } from "../controllers/login";
-import { RegisterSocialSession, TouchSocialSession, UnregisterSocialSession } from "../controllers/social";
+import { AddSocialEventListener, RegisterSocialSession, TouchSocialSession, UnregisterSocialSession, UpdateSocialPresenceState } from "../controllers/social";
 import { logger } from "../logger";
+import { LogProtocol } from "../protocolLogger";
 import { attr, escapeXml, findChild, findDescendant, nodeText, parseOpeningTag, XmppNode } from "./xml";
 
 const XMPP_PATH = process.env.XMPP_PATH || "/xmpp";
@@ -93,7 +95,7 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
             return;
         }
 
-        logger.info(`Accepted XMPP websocket upgrade for ${RequestUrl.pathname}`);
+        LogProtocol("xmpp", "upgrade.accepted", { path: RequestUrl.pathname });
         WebsocketServer.handleUpgrade(request, socket, head, (ws) => {
             WebsocketServer.emit("connection", ws, request);
         });
@@ -103,7 +105,7 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
         const Session = createSession(ws);
         Sessions.add(Session);
         indexSession(Session);
-        logger.info(`XMPP client connected as ${Session.userId}`);
+        LogProtocol("xmpp", "session.connected", { userId: Session.userId, sessionId: Session.id });
 
         ws.on("message", (data) => handleFrame(Session, data.toString()));
         ws.on("pong", () => {
@@ -117,7 +119,7 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
         const Now = Date.now();
         for (const Session of Sessions) {
             if (Now - Session.lastActivityAt > XMPP_IDLE_CLOSE_MS) {
-                logger.info(`XMPP idle timeout for ${Session.userId} after ${Math.round((Now - Session.lastActivityAt) / 1000)}s`);
+                LogProtocol("xmpp", "session.idle_timeout", { userId: Session.userId, sessionId: Session.id, idleSeconds: Math.round((Now - Session.lastActivityAt) / 1000) });
                 Session.ws.close(1000, "idle timeout");
                 continue;
             }
@@ -129,9 +131,17 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
     }, XMPP_HEARTBEAT_MS);
 
     Heartbeat.unref();
-    WebsocketServer.on("close", () => clearInterval(Heartbeat));
+    const RemoveSocialEventListener = AddSocialEventListener((event) => {
+        void BroadcastFriendPresence(event.userId);
+    });
+
+    WebsocketServer.on("close", () => {
+        clearInterval(Heartbeat);
+        RemoveSocialEventListener();
+    });
 
     logger.info(`XMPP websocket server mounted at ${Path}`);
+    LogProtocol("xmpp", "server.mounted", { path: Path });
     return WebsocketServer;
 }
 
@@ -179,7 +189,9 @@ function handleFrame(session: XmppSession, frame: string) {
         return;
     }
 
-    logger.debug({ userId: session.userId, frame: TrimmedFrame.slice(0, 500) }, "XMPP frame received");
+    if (!IsXmppPingFrame(TrimmedFrame)) {
+        LogProtocol("xmpp", "frame.received", { userId: session.userId, framePreview: TrimmedFrame.slice(0, 500) });
+    }
 
     if (TrimmedFrame.startsWith("<stream:stream") || TrimmedFrame.startsWith("<stream")) {
         handleStreamOpen(session, parseOpeningTag(TrimmedFrame));
@@ -281,7 +293,7 @@ async function handleAuth(session: XmppSession, node: XmppNode) {
     const DisplayName = await resolveDisplayName(Identity.userId, Identity.displayName);
     applyIdentity(session, { ...Identity, displayName: DisplayName });
     session.authenticated = true;
-    logger.info({ userId: session.userId, displayName: session.displayName, recipientKeys: [...getSessionRecipientKeys(session)] }, "XMPP session authenticated");
+    LogProtocol("xmpp", "session.authenticated", { userId: session.userId, displayName: session.displayName, recipientKeys: [...getSessionRecipientKeys(session)] });
     send(session, `<success xmlns="urn:ietf:params:xml:ns:xmpp-sasl"/>`);
 }
 
@@ -397,7 +409,7 @@ async function resolveConfiguredLocalDisplayName(userId: string) {
         try {
             const LocalDisplayName = cleanDisplayName(await GetDisplayUsernameForUserId(LocalUserId), LocalUserId);
             if (!isGeneratedDisplayName(LocalDisplayName, LocalUserId)) {
-                logger.info(`XMPP resolved generated display name ${userId} via local user ${LocalUserId}`);
+                LogProtocol("xmpp", "display_name.local_fallback", { userId, localUserId: LocalUserId });
                 return LocalDisplayName;
             }
         }
@@ -424,7 +436,7 @@ function handleIq(session: XmppSession, node: XmppNode) {
         session.resource = sanitizeResource(Resource);
         session.fullJid = `${session.bareJid}/${session.resource}`;
         indexSession(session);
-        logger.info({ userId: session.userId, fullJid: session.fullJid, recipientKeys: [...getSessionRecipientKeys(session)] }, "XMPP session bound");
+        LogProtocol("xmpp", "session.bound", { userId: session.userId, fullJid: session.fullJid, recipientKeys: [...getSessionRecipientKeys(session)] });
         send(session, `<iq xmlns="jabber:client" type="result"${attr("id", Id)}${attr("to", session.fullJid)}><bind xmlns="urn:ietf:params:xml:ns:xmpp-bind"><jid>${escapeXml(session.fullJid)}</jid></bind></iq>`);
         return;
     }
@@ -441,7 +453,7 @@ function handleIq(session: XmppSession, node: XmppNode) {
 
     const Query = findDescendant(node, "query");
     if (Query?.attrs.xmlns === "jabber:iq:roster") {
-        send(session, `<iq type="result"${attr("id", Id)}${attr("to", session.fullJid)}><query xmlns="jabber:iq:roster"/></iq>`);
+        void sendRoster(session, Id);
         return;
     }
 
@@ -465,10 +477,125 @@ function handleIq(session: XmppSession, node: XmppNode) {
     send(session, `<iq type="result"${attr("id", Id)}${attr("to", session.fullJid)}/>`);
 }
 
+async function sendRoster(session: XmppSession, id: string | undefined) {
+    const Items = await Promise.all(GetConfiguredRosterFriendIds(session.userId).map(async (FriendUserId) => {
+        const Presence = await BuildPresenceResult(FriendUserId);
+        const DisplayName = String(Presence.payload.displayName ?? FriendUserId);
+
+        return [
+            `<item jid="${escapeXml(toBareJid(FriendUserId))}"`,
+            ` name="${escapeXml(DisplayName)}"`,
+            ` subscription="both"/>`
+        ].join("");
+    }));
+
+    send(session, [
+        `<iq type="result"${attr("id", id)}${attr("to", session.fullJid)}>`,
+        `<query xmlns="jabber:iq:roster">`,
+        ...Items,
+        `</query></iq>`
+    ].join(""));
+    LogProtocol("xmpp", "roster.response", {
+        userId: session.userId,
+        fullJid: session.fullJid,
+        friendUserIds: GetConfiguredRosterFriendIds(session.userId)
+    });
+
+    for (const FriendUserId of GetConfiguredRosterFriendIds(session.userId)) {
+        await sendFriendPresence(session, FriendUserId);
+    }
+}
+
+async function BroadcastFriendPresence(friendUserId: string) {
+    const ConfiguredFriends = GetSocialFriendUserIds();
+    if (!ConfiguredFriends.includes(friendUserId)) {
+        return;
+    }
+
+    for (const Session of Sessions) {
+        if (!Session.authenticated || Session.userId === friendUserId) {
+            continue;
+        }
+
+        await sendFriendPresence(Session, friendUserId);
+    }
+}
+
+async function sendFriendPresence(session: XmppSession, friendUserId: string) {
+    const Presence = await BuildPresenceResult(friendUserId);
+    const PresenceProperties = Presence.payload.properties as Record<string, unknown>;
+    const From = fullPresenceJidForUserId(friendUserId);
+
+    if (!Presence.payload.online) {
+        send(session, `<presence xmlns="jabber:client" type="unavailable" from="${escapeXml(From)}" to="${escapeXml(session.fullJid)}"/>`);
+        return;
+    }
+
+    const StatusJson = JSON.stringify({
+        Status: Presence.payload.StatusStr,
+        StatusStr: Presence.payload.StatusStr,
+        State: Presence.payload.State,
+        IsOnline: Presence.payload.IsOnline,
+        IsPlaying: Presence.payload.IsPlaying,
+        IsJoinable: Presence.payload.IsJoinable,
+        AppId: Presence.payload.AppId,
+        PlatformString: Presence.payload.PlatformString,
+        bIsPlaying: Presence.payload.bIsPlaying,
+        bIsJoinable: Presence.payload.bIsJoinable,
+        bHasVoiceSupport: Presence.payload.bHasVoiceSupport,
+        SessionId: PresenceProperties.SessionId ?? PresenceProperties.sessionId ?? "",
+        ProductName: Presence.payload.productName,
+        RichPresence: Presence.payload.richPresence,
+        Properties: {
+            ...PresenceProperties,
+            Status: Presence.payload.StatusStr,
+            RichPresence_s: Presence.payload.richPresence,
+            AppId: Presence.payload.AppId,
+            PlatformString: Presence.payload.PlatformString,
+            State: Presence.payload.State,
+            IsOnline: Presence.payload.IsOnline
+        }
+    });
+
+    send(session, [
+        `<presence xmlns="jabber:client" from="${escapeXml(From)}" to="${escapeXml(session.fullJid)}">`,
+        `<show>chat</show>`,
+        `<status>${escapeXml(StatusJson)}</status>`,
+        `</presence>`
+    ].join(""));
+    LogProtocol("xmpp", "presence.friend_direct", {
+        recipientUserId: session.userId,
+        friendUserId,
+        from: From,
+        to: session.fullJid,
+        online: Presence.payload.online,
+        state: Presence.payload.State,
+        status: Presence.payload.StatusStr
+    });
+}
+
+function GetConfiguredRosterFriendIds(userId: string) {
+    return GetSocialFriendUserIds().filter((FriendUserId) => FriendUserId !== userId);
+}
+
+function fullPresenceJidForUserId(userId: string) {
+    const LiveSession = [...Sessions].find((Session) => Session.authenticated && Session.userId === userId);
+    if (LiveSession != undefined) {
+        return LiveSession.fullJid;
+    }
+
+    return `${toBareJid(userId)}/V2:Jackal:WIN::${sanitizeResource(userId)}`;
+}
+
 function handlePresence(session: XmppSession, node: XmppNode) {
     const To = node.attrs.to;
     if (To == undefined) {
-        logger.info({ userId: session.userId, fullJid: session.fullJid }, "XMPP self presence");
+        const PresenceState = ParseSelfPresenceState(node, session.id);
+        if (PresenceState != undefined) {
+            UpdateSocialPresenceState(session.userId, PresenceState);
+        }
+
+        LogProtocol("xmpp", "presence.self", { userId: session.userId, fullJid: session.fullJid, presence: PresenceState });
         send(session, `<presence xmlns="jabber:client" from="${escapeXml(session.fullJid)}" to="${escapeXml(session.fullJid)}"/>`);
         return;
     }
@@ -485,6 +612,73 @@ function handlePresence(session: XmppSession, node: XmppNode) {
     joinRoom(session, Room, Nick);
 }
 
+function IsXmppPingFrame(frame: string) {
+    return frame.includes("<ping") && frame.includes("urn:xmpp:ping");
+}
+
+function ParseSelfPresenceState(node: XmppNode, fallbackSessionId: string) {
+    const RawStatus = nodeText(node, "status");
+    if (RawStatus == undefined || RawStatus.trim().length === 0) {
+        return undefined;
+    }
+
+    const TrimmedStatus = RawStatus.trim();
+    let ParsedStatus: unknown;
+
+    try {
+        ParsedStatus = JSON.parse(TrimmedStatus);
+    }
+    catch {
+        return {
+            status: TrimmedStatus,
+            properties: {
+                Status: TrimmedStatus
+            },
+            richPresence: TrimmedStatus,
+            bIsPlaying: false,
+            bIsJoinable: false,
+            bHasVoiceSupport: false,
+            sessionId: fallbackSessionId
+        };
+    }
+
+    if (!IsRecord(ParsedStatus)) {
+        return undefined;
+    }
+
+    const RawProperties = IsRecord(ParsedStatus.Properties) ? ParsedStatus.Properties : {};
+    const Status = StringValue(ParsedStatus.Status) ?? StringValue(RawProperties.RichPresence_s) ?? "Online";
+
+    return {
+        status: Status,
+        properties: {
+            ...RawProperties,
+            Status,
+            bIsPlaying: BooleanValue(ParsedStatus.bIsPlaying),
+            bIsJoinable: BooleanValue(ParsedStatus.bIsJoinable),
+            bHasVoiceSupport: BooleanValue(ParsedStatus.bHasVoiceSupport),
+            SessionId: StringValue(ParsedStatus.SessionId) ?? ""
+        },
+        richPresence: Status,
+        bIsPlaying: BooleanValue(ParsedStatus.bIsPlaying),
+        bIsJoinable: BooleanValue(ParsedStatus.bIsJoinable),
+        bHasVoiceSupport: BooleanValue(ParsedStatus.bHasVoiceSupport),
+        sessionId: StringValue(ParsedStatus.SessionId) ?? fallbackSessionId
+    };
+}
+
+function IsRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value != undefined && !Array.isArray(value);
+}
+
+function StringValue(value: unknown) {
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function BooleanValue(value: unknown) {
+    return typeof value === "boolean" ? value : false;
+}
+
 function joinRoom(session: XmppSession, room: string, nick: string) {
     const DeliveryKey = roomDeliveryKey(room);
     let Members = RoomMembers.get(DeliveryKey);
@@ -496,7 +690,7 @@ function joinRoom(session: XmppSession, room: string, nick: string) {
     const ExistingMembers = [...Members].filter((Member) => Member !== session && Member.authenticated);
     Members.add(session);
     session.rooms.set(room, nick);
-    logger.info({ userId: session.userId, room, deliveryKey: DeliveryKey, nick, memberCount: Members.size }, "XMPP joined room");
+    LogProtocol("xmpp", "room.joined", { userId: session.userId, room, deliveryKey: DeliveryKey, nick, memberCount: Members.size });
 
     sendRoomOccupantPresence(session, room, session, nick, true);
 
@@ -515,7 +709,7 @@ function leaveRoom(session: XmppSession, room: string, nick: string) {
     const DeliveryKey = roomDeliveryKey(room);
     RoomMembers.get(DeliveryKey)?.delete(session);
     session.rooms.delete(room);
-    logger.info({ userId: session.userId, room, deliveryKey: DeliveryKey, nick: JoinedNick }, "XMPP left room");
+    LogProtocol("xmpp", "room.left", { userId: session.userId, room, deliveryKey: DeliveryKey, nick: JoinedNick });
     sendRoomOccupantUnavailable(session, room, session, JoinedNick, true);
 
     for (const Member of RoomMembers.get(DeliveryKey) ?? []) {
@@ -567,7 +761,7 @@ function handleGroupMessage(session: XmppSession, node: XmppNode, body: string) 
         }
     }
 
-    logger.info({
+    LogProtocol("xmpp", "message.groupchat.route", {
         senderUserId: session.userId,
         room: Room,
         deliveryKey: DeliveryKey,
@@ -576,7 +770,7 @@ function handleGroupMessage(session: XmppSession, node: XmppNode, body: string) 
         roomMemberCount: Members.size,
         recipientCount: Recipients.size,
         broadcastFallback: Recipients.size > Members.size
-    }, "XMPP groupchat route");
+    });
 
     for (const Recipient of Recipients) {
         sendRoomMessage(Recipient, Message, roomForRecipientDelivery(Recipient, Message));
@@ -600,13 +794,13 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
     };
 
     const Recipients = new Set([...findRecipientSessions(To)].filter((Candidate) => Candidate !== session && Candidate.authenticated));
-    logger.info({
+    LogProtocol("xmpp", "message.private.route", {
         senderUserId: session.userId,
         toRaw: To,
         normalizedKeys: [...ToKeys],
         bodyPreview: body.slice(0, 80),
         recipientCount: Recipients.size
-    }, "XMPP private chat route");
+    });
 
     if (Recipients.size === 0) {
         logger.warn({
@@ -665,7 +859,7 @@ function closeSession(session: XmppSession) {
     UnregisterSocialSession(session.socialSessionId);
     unindexSession(session);
     Sessions.delete(session);
-    logger.info({ userId: session.userId, fullJid: session.fullJid }, "XMPP client disconnected");
+    LogProtocol("xmpp", "session.disconnected", { userId: session.userId, fullJid: session.fullJid });
 }
 
 function indexSession(session: XmppSession) {

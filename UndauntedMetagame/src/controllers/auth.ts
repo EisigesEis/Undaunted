@@ -21,6 +21,30 @@ export type MetagameOAuthTokenResponse = {
     account_id: string
 };
 
+export type EpicOAuthV2TokenResponse = {
+    token: string,
+    session_id: string,
+    token_type: "bearer",
+    client_id: string,
+    internal_client: boolean,
+    client_service: "prod-jackal",
+    account_id: string,
+    expires_in: number,
+    expires_at: string,
+    auth_method: "exchange_code",
+    display_name: string,
+    app: "prod-jackal",
+    in_app_id: string,
+    device_id: string,
+    scope: string[],
+    product_id: "prod-jackal",
+    sandbox_id: "jackal",
+    deployment_id: "53565ba467df4edbb6f5a3d939a8b4f2",
+    application_id: "fghi4567rNJHv9pNoyczQXo6DDJ6RDeq",
+    acr: "urn:epic:loa:aal1",
+    auth_time: string
+};
+
 export function HashUserAPIKey(UserAPIKeyToHash: string){
     return crypto.createHash("sha256").update(UserAPIKeyToHash, "utf8").digest("hex");
 }
@@ -118,6 +142,35 @@ function BuildMetagameOAuthTokenResponseForUid(userId: string, RefreshToken: Awa
 
 export async function CreateMetagameOAuthTokenResponseForUid(userId: string): Promise<MetagameOAuthTokenResponse>{
     return BuildMetagameOAuthTokenResponseForUid(userId, await IssueRefreshTokenForUid(userId));
+}
+
+export function CreateEpicOAuthV2TokenResponseForUid(userId: string, displayName: string): EpicOAuthV2TokenResponse {
+    const AccessExpiresAt = DateSecondsFromNow(ACCESS_TOKEN_TTL_SECONDS);
+    const IssuedAt = new Date();
+
+    return {
+        token: SignMetagameJWTForUid(userId),
+        session_id: crypto.randomBytes(16).toString("hex"),
+        token_type: "bearer",
+        client_id: "12c4279862ab4460a25c2e9fa535fb7e",
+        internal_client: false,
+        client_service: "prod-jackal",
+        account_id: userId,
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
+        expires_at: AccessExpiresAt.toISOString(),
+        auth_method: "exchange_code",
+        display_name: displayName,
+        app: "prod-jackal",
+        in_app_id: userId,
+        device_id: crypto.randomBytes(16).toString("hex"),
+        scope: ["basic_profile", "friends_list", "country", "openid", "presence"],
+        product_id: "prod-jackal",
+        sandbox_id: "jackal",
+        deployment_id: "53565ba467df4edbb6f5a3d939a8b4f2",
+        application_id: "fghi4567rNJHv9pNoyczQXo6DDJ6RDeq",
+        acr: "urn:epic:loa:aal1",
+        auth_time: IssuedAt.toISOString()
+    };
 }
 
 export async function RotateRefreshToken(RefreshToken: string){

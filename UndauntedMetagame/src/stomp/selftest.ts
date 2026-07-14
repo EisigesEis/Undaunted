@@ -6,7 +6,7 @@ import { SignMetagameJWTForUid } from "../controllers/auth";
 import { AttachStompServer } from "./server";
 import { AttachXmppServer } from "../xmpp/server";
 import { RememberUsernameForUserId } from "../controllers/login";
-import { RegisterSocialSession, UnregisterSocialSession } from "../controllers/social";
+import { RegisterSocialSession, UnregisterSocialSession, UpdateSocialPresenceState } from "../controllers/social";
 import { UpdatePlayerActivity } from "../controllers/undauntedapi";
 
 /**
@@ -24,6 +24,8 @@ const TestUserId = "stomp-test-user-a";
 const TestFriendId = "stomp-test-user-b";
 
 async function main() {
+    process.env.PROTOCOL_FILE_LOG = "false";
+
     const server = http.createServer((_req, res) => {
         res.statusCode = 404;
         res.end();
@@ -40,7 +42,6 @@ async function main() {
     RememberUsernameForUserId(TestUserId, "STOMP Test User");
     RememberUsernameForUserId(TestFriendId, "STOMP Test Friend");
     const Token = SignMetagameJWTForUid(TestUserId);
-    const FriendSession = RegisterSocialSession(TestFriendId, "xmpp");
 
     const Alice = await connect(`${BaseUrl}/ws/${TestUserId}?access_token=${encodeURIComponent(Token)}`);
     Alice.ws.send("CONNECT\naccept-version:1.2\n\n\0");
@@ -48,14 +49,33 @@ async function main() {
 
     Alice.ws.send("SUBSCRIBE\nid:friends\ndestination:/topic/friends\n\n\0");
     await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes("presence.updated"), "subscription message");
-    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"online":true'), "friend online snapshot");
-
-    UnregisterSocialSession(FriendSession);
-    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"online":false'), "friend offline broadcast");
+    const FriendSnapshot = ParseStompJson(await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"source":"configured-friend"'), "configured friend online snapshot"));
+    assert.strictEqual(FriendSnapshot.online, true);
+    assert.strictEqual(FriendSnapshot.IsOnline, true);
+    assert.strictEqual(FriendSnapshot.State, 0);
+    assert.strictEqual(FriendSnapshot.StatusStr, "Online");
+    assert.strictEqual(FriendSnapshot.AppId, "Jackal");
+    assert.strictEqual(FriendSnapshot.PlatformString, "WIN");
+    assert.strictEqual(FriendSnapshot.presence.IsOnline, true);
+    assert.strictEqual(FriendSnapshot.presence.State, 0);
 
     await UpdatePlayerActivity(TestFriendId, "Ramsgate_City");
     const ActiveFriendSession = RegisterSocialSession(TestFriendId, "xmpp");
     await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"online":true') && Message.includes("In Ramsgate"), "friend activity presence broadcast");
+    UpdateSocialPresenceState(TestFriendId, {
+        status: "Dauntless - In a hunt",
+        richPresence: "Dauntless - In a hunt",
+        properties: {
+            RichPresence_s: "InAHunt",
+            PartyPlayerCountData_i: 1,
+            Status: "Dauntless - In a hunt"
+        },
+        bIsPlaying: false,
+        bIsJoinable: false,
+        bHasVoiceSupport: false,
+        sessionId: "hunt-selftest"
+    });
+    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"Dauntless - In a hunt"') && Message.includes('"RichPresence_s":"InAHunt"'), "friend xmpp rich presence broadcast");
 
     Alice.ws.send("\n");
     assert.strictEqual(Alice.ws.readyState, WebSocket.OPEN);
@@ -164,6 +184,13 @@ function waitForMessage(
         };
         waiters.push(Waiter);
     });
+}
+
+function ParseStompJson(message: string) {
+    const BodyStart = message.indexOf("\n\n");
+    assert.notStrictEqual(BodyStart, -1, "STOMP message should include a body separator");
+    const Body = message.slice(BodyStart + 2).replace(/\0$/, "");
+    return JSON.parse(Body);
 }
 
 main().catch((error) => {

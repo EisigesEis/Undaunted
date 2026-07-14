@@ -1,9 +1,51 @@
 import { Router } from "express";
 import { logger } from "../logger";
-import { CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
+import { CreateEpicOAuthV2TokenResponseForUid, CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
 import { BuildExternalAuths, BuildPublicAccountPayload, BuildSdkAccountPayload, GetCanonicalDisplayNameForAccountId } from "../controllers/accountProfile";
 
 export const eosRouter = Router();
+
+eosRouter.get("/epic/oauth/v2/exchange", async (req, res) => {
+    const UserId = await ResolveOAuthUserId(req.query.exchange_code ?? req.query.code ?? req.query.user_id);
+    if (UserId == undefined) {
+        logger.warn({
+            query: req.query
+        }, "Epic OAuth exchange request could not resolve user");
+        res.status(400).json({ error: "invalid_exchange_code" });
+        return;
+    }
+
+    logger.info({
+        userId: UserId,
+        consumingClientId: req.query.consumingClientId
+    }, "Epic OAuth exchange response");
+
+    res.json({
+        code: UserId
+    });
+});
+
+eosRouter.post("/epic/oauth/v2/token", async (req, res) => {
+    const UserId = await ResolveOAuthUserId(req.body?.exchange_code ?? req.body?.code ?? req.body?.refresh_token);
+    if (UserId == undefined) {
+        logger.warn({
+            grantType: req.body?.grant_type
+        }, "Epic OAuth v2 token request could not resolve user");
+        res.status(400).json({ error: "invalid_grant" });
+        return;
+    }
+
+    const DisplayName = await GetCanonicalDisplayNameForAccountId(UserId);
+    const TokenResponse = CreateEpicOAuthV2TokenResponseForUid(UserId, DisplayName);
+
+    logger.info({
+        userId: UserId,
+        displayName: DisplayName,
+        grantType: req.body?.grant_type
+    }, "Epic OAuth v2 token response");
+
+    res.json(TokenResponse);
+});
 
 eosRouter.post("/account/api/oauth/token", async (req, res) => {
     if(req.body.grant_type === "refresh_token"){
@@ -88,6 +130,16 @@ eosRouter.post("/account/api/oauth/token", async (req, res) => {
         logger.fatal("No login method configured!");
     }
 });
+
+async function ResolveOAuthUserId(value: unknown) {
+    if (typeof value === "string" && value.length > 0) {
+        const UserIdFromApiKey = await GetUserIDForAPIKey(value);
+        return UserIdFromApiKey ?? value;
+    }
+
+    const DefaultUserId = process.env.LOCAL_USER_ID ?? process.env.DEFAULT_USER_ID;
+    return typeof DefaultUserId === "string" && DefaultUserId.length > 0 ? DefaultUserId : undefined;
+}
 
 eosRouter.get("/account/api/oauth/verify", (req, res) => {
     logger.info("Verifying token");
