@@ -132,25 +132,6 @@ systemRouter.get("/playertreatments/:userId", HasUndauntedMetagameAuth, (req, re
 	});
 });
 
-systemRouter.get("/escalation/:escalationSeason/:userId", HasUndauntedMetagameAuth, (req, res) => {
-	const EscalationSeason = req.params.escalationSeason;
-
-	logger.info(`Escalation Configuration for season ${EscalationSeason} (stubbed)`);
-
-	res.status(200);
-	res.json({
-		code: null,
-		message: "OK",
-		payload: {
-        	escalation_level: 99999,
-        	next_level_xp: 99999,
-        	talents_progress: [],
-        	unlock_progress: [],
-        	update_version: 1,
-      	}
-	});
-});
-
 systemRouter.get("/eventstats/", HasUndauntedMetagameAuth, (req, res) => {
 	logger.info("Event stats (stubbed)");
 
