@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace SDK;
@@ -10,6 +11,12 @@ namespace Networking {
     UNetDriver* NetDriver = nullptr;
 
     namespace {
+        // Replication config: default keeps the proven cache/channel optimizations on.
+        constexpr bool kEnableOptimizedReplication = true;
+        constexpr bool kEnableReplicationThrottling = true;
+        constexpr bool kAlwaysReplicateCriticalActors = true;
+        constexpr uint32_t kConnectionWarmupFullReplicationTicks = 300;
+
         constexpr uintptr_t OffsetActorGetWorldVTable = 0x150;
         constexpr uintptr_t OffsetActorSetNetDriver = 0x306B150;
         constexpr uintptr_t OffsetCreateNamedNetDriver = 0x371A5E0;
@@ -88,25 +95,81 @@ namespace Networking {
             ReplicationBucket Bucket = ReplicationBucket::Immediate;
             ReplicationPolicy Policy{ 1, 0.0f, 0.0f };
             bool IsPlayerController = false;
+            bool IsCritical = false;
         };
     }
 
     static uintptr_t BaseAddress = 0x0;
     static std::vector<ReplicationCandidate> ConsiderCache{};
     static std::vector<ReplicationCandidate*> ReplicateList{};
+    static std::unordered_set<ReplicationCandidate*> ReplicateSet{};
     static std::vector<int> CachedLevelActorCounts{};
     static UWorld* CachedWorld = nullptr;
     static ULONGLONG LastConsiderCacheBuildMs = 0;
     static std::unordered_map<AActor*, UActorChannel*> ScratchActorChannels{};
     static std::unordered_map<AActor*, ActorReplicationState> ActorReplicationStates{};
+    static std::unordered_map<UNetConnection*, uint32_t> ConnectionOpenedTicks{};
+
+    static bool IsOpenConnection(UNetConnection* Connection) {
+        return Connection
+            && Connection->OwningActor
+            && *reinterpret_cast<uint32_t*>((uintptr_t)Connection + OffsetConnectionState) == OpenConnectionState;
+    }
 
     static void ResetConsiderCache() {
         ConsiderCache.clear();
         ReplicateList.clear();
+        ReplicateSet.clear();
         CachedLevelActorCounts.clear();
         ActorReplicationStates.clear();
+        ConnectionOpenedTicks.clear();
         CachedWorld = nullptr;
         LastConsiderCacheBuildMs = 0;
+    }
+
+    static bool RefreshConnectionState(UNetDriver* Driver, uint32_t CurrentTick) {
+        if (!Driver)
+            return false;
+
+        bool DidChange = false;
+        std::unordered_set<UNetConnection*> LiveConnections{};
+        LiveConnections.reserve(Driver->ClientConnections.Num());
+
+        for (UNetConnection* Connection : Driver->ClientConnections) {
+            if (!IsOpenConnection(Connection))
+                continue;
+
+            LiveConnections.insert(Connection);
+
+            if (!ConnectionOpenedTicks.contains(Connection)) {
+                ConnectionOpenedTicks[Connection] = CurrentTick;
+                DidChange = true;
+            }
+        }
+
+        for (auto It = ConnectionOpenedTicks.begin(); It != ConnectionOpenedTicks.end();) {
+            if (!LiveConnections.contains(It->first)) {
+                It = ConnectionOpenedTicks.erase(It);
+                DidChange = true;
+            }
+            else {
+                ++It;
+            }
+        }
+
+        if (DidChange)
+            ActorReplicationStates.clear();
+
+        return DidChange;
+    }
+
+    static bool IsConnectionWarmingUp(UNetConnection* Connection, uint32_t CurrentTick) {
+        auto It = ConnectionOpenedTicks.find(Connection);
+
+        if (It == ConnectionOpenedTicks.end())
+            return kConnectionWarmupFullReplicationTicks > 0;
+
+        return CurrentTick - It->second < kConnectionWarmupFullReplicationTicks;
     }
 
     static UWorld* GetActorWorld(AActor* Actor) {
@@ -244,6 +307,28 @@ namespace Networking {
             : ReplicationBucket::Immediate;
     }
 
+    static bool IsCriticalReplicationActor(AActor* Actor, const ReplicationClassCache& ClassCache, bool IsPlayerController) {
+        if (!kAlwaysReplicateCriticalActors)
+            return false;
+
+        return IsPlayerController
+            || Actor->IsA(ClassCache.ArchonCharacter)
+            || Actor->IsA(ClassCache.ArchonLantern);
+    }
+
+    static bool IsConnectionCriticalActor(AActor* Actor, UNetConnection* Connection) {
+        if (!kAlwaysReplicateCriticalActors || !Actor || !Connection)
+            return false;
+
+        AActor* OwningActor = Connection->OwningActor;
+        AActor* OwnedPawn = Connection->PlayerController ? Connection->PlayerController->Pawn : nullptr;
+        AActor* ViewTarget = Connection->ViewTarget;
+
+        return Actor == OwningActor
+            || Actor == OwnedPawn
+            || Actor == ViewTarget;
+    }
+
     static void PruneReplicationState(UWorld* World) {
         for (auto It = ActorReplicationStates.begin(); It != ActorReplicationStates.end();) {
             if (!IsActorReplicationCandidate(World, It->first))
@@ -282,9 +367,10 @@ namespace Networking {
                 TransformSample Sample = SampleActorTransform(Actor);
                 bool IsPlayerController = Actor->IsA(ClassCache.PlayerController);
                 ReplicationBucket Bucket = ClassifyReplicationBucket(Actor, ClassCache, Sample, IsPlayerController);
+                bool IsCritical = IsCriticalReplicationActor(Actor, ClassCache, IsPlayerController);
 
                 SetActorNetDriver(Actor, Driver);
-                ConsiderCache.push_back({ Actor, Bucket, GetReplicationPolicy(Bucket), IsPlayerController });
+                ConsiderCache.push_back({ Actor, Bucket, GetReplicationPolicy(Bucket), IsPlayerController, IsCritical });
             }
         }
 
@@ -295,7 +381,9 @@ namespace Networking {
 
     static void BuildReplicateList(uint32_t CurrentTick) {
         ReplicateList.clear();
+        ReplicateSet.clear();
         ReplicateList.reserve(ConsiderCache.size());
+        ReplicateSet.reserve(ConsiderCache.size());
 
         for (ReplicationCandidate& Candidate : ConsiderCache) {
             AActor* Actor = Candidate.Actor;
@@ -303,8 +391,9 @@ namespace Networking {
             if (!IsCachedActorStillReplicatable(Actor))
                 continue;
 
-            if (Candidate.Bucket == ReplicationBucket::Immediate) {
+            if (!kEnableReplicationThrottling || Candidate.IsCritical || Candidate.Bucket == ReplicationBucket::Immediate) {
                 ReplicateList.push_back(&Candidate);
+                ReplicateSet.insert(&Candidate);
                 continue;
             }
 
@@ -316,6 +405,7 @@ namespace Networking {
                 State.LastReplicatedTick = CurrentTick;
                 State.HasReplicated = true;
                 ReplicateList.push_back(&Candidate);
+                ReplicateSet.insert(&Candidate);
                 continue;
             }
 
@@ -330,6 +420,7 @@ namespace Networking {
             State.LastReplicatedTick = CurrentTick;
             State.HasReplicated = true;
             ReplicateList.push_back(&Candidate);
+            ReplicateSet.insert(&Candidate);
         }
     }
 
@@ -346,6 +437,103 @@ namespace Networking {
         }
 
         return nullptr;
+    }
+
+    static std::vector<ReplicationCandidate> BuildPlainConsiderList(UWorld* World, UNetDriver* Driver, const ReplicationClassCache& ClassCache) {
+        std::vector<ReplicationCandidate> Actors{};
+
+        if (!World || !Driver)
+            return Actors;
+
+        SetActorNetDriverFn SetActorNetDriver = reinterpret_cast<SetActorNetDriverFn>(BaseAddress + OffsetActorSetNetDriver);
+        Actors.reserve(CountWorldActors(World));
+
+        for (ULevel* Level : World->Levels) {
+            if (!Level)
+                continue;
+
+            for (AActor* Actor : Level->Actors) {
+                if (!IsActorReplicationCandidate(World, Actor))
+                    continue;
+
+                TransformSample Sample = SampleActorTransform(Actor);
+                bool IsPlayerController = Actor->IsA(ClassCache.PlayerController);
+                ReplicationBucket Bucket = ClassifyReplicationBucket(Actor, ClassCache, Sample, IsPlayerController);
+                bool IsCritical = IsCriticalReplicationActor(Actor, ClassCache, IsPlayerController);
+
+                SetActorNetDriver(Actor, Driver);
+                Actors.push_back({ Actor, Bucket, GetReplicationPolicy(Bucket), IsPlayerController, IsCritical });
+            }
+        }
+
+        return Actors;
+    }
+
+    static bool ReplicateActorForConnection(
+        UNetConnection* Connection,
+        AActor* Actor,
+        bool IsPlayerController,
+        FName& ChannelName,
+        CreateChannelByNameFn CreateChannelByName,
+        SetChannelActorFn SetChannelActor,
+        ReplicateActorFn ReplicateActor,
+        UpdateCameraFn UpdateCamera
+    ) {
+        if (!Connection || !Actor)
+            return false;
+
+        if (IsPlayerController) {
+            if (Actor != Connection->OwningActor)
+                return false;
+
+            APlayerController* PlayerController = static_cast<APlayerController*>(Actor);
+            Connection->ViewTarget = PlayerController->GetViewTarget();
+            UpdateCamera(PlayerController);
+        }
+
+        UActorChannel* ActorChannel = nullptr;
+        auto ActorChannelIt = ScratchActorChannels.find(Actor);
+
+        if (ActorChannelIt != ScratchActorChannels.end()) {
+            ActorChannel = ActorChannelIt->second;
+        }
+        else {
+            ActorChannel = CreateChannelByName(Connection, &ChannelName, OpenChannelFlag, -1);
+
+            if (ActorChannel) {
+                SetChannelActor(ActorChannel, Actor, 0);
+                ScratchActorChannels[Actor] = ActorChannel;
+            }
+        }
+
+        if (!ActorChannel || !ActorChannel->Actor)
+            return false;
+
+        int& ReplicationFlags = *reinterpret_cast<int*>((uintptr_t)ActorChannel + OffsetActorChannelReplicationFlags);
+
+        if (!(ReplicationFlags & ReplicationFlagNeedsTick))
+            ReplicationFlags |= ReplicationFlagNeedsTick;
+
+        ReplicateActor(ActorChannel);
+        return true;
+    }
+
+    static void BuildActorChannelScratchMap(UNetConnection* Connection, UClass* ActorChannelClass) {
+        ScratchActorChannels.clear();
+        ScratchActorChannels.reserve(Connection ? Connection->OpenChannels.Num() : 0);
+
+        if (!Connection)
+            return;
+
+        for (UChannel* Channel : Connection->OpenChannels) {
+            if (!Channel || Channel->Class != ActorChannelClass)
+                continue;
+
+            UActorChannel* ActorChannel = static_cast<UActorChannel*>(Channel);
+
+            if (ActorChannel->Actor)
+                ScratchActorChannels[ActorChannel->Actor] = ActorChannel;
+        }
     }
 
     bool Listen(UEngine* Engine, int Port) {
@@ -421,100 +609,53 @@ namespace Networking {
 
         uint32_t& NetworkTick = *reinterpret_cast<uint32_t*>((uintptr_t)NetDriver + OffsetNetDriverTickCount);
         ++NetworkTick;
+        RefreshConnectionState(NetDriver, NetworkTick);
 
-        if (ShouldRebuildConsiderCache(World))
-            RebuildConsiderCache(World, NetDriver, ClassCache);
+        if constexpr (kEnableOptimizedReplication) {
+            if (ShouldRebuildConsiderCache(World))
+                RebuildConsiderCache(World, NetDriver, ClassCache);
 
-        BuildReplicateList(NetworkTick);
+            BuildReplicateList(NetworkTick);
+        }
 
         for (UNetConnection* Connection : NetDriver->ClientConnections) {
-            if (!Connection
-                || !Connection->OwningActor
-                || *reinterpret_cast<uint32_t*>((uintptr_t)Connection + OffsetConnectionState) != OpenConnectionState)
+            if (!IsOpenConnection(Connection))
                 continue;
 
-            ScratchActorChannels.clear();
-            ScratchActorChannels.reserve(Connection->OpenChannels.Num());
+            BuildActorChannelScratchMap(Connection, ActorChannelClass);
 
-            for (UChannel* Channel : Connection->OpenChannels) {
-                if (!Channel || Channel->Class != ActorChannelClass)
-                    continue;
+            if (Connection->PlayerController)
+                Connection->ViewTarget = Connection->PlayerController->GetViewTarget();
 
-                UActorChannel* ActorChannel = static_cast<UActorChannel*>(Channel);
+            if constexpr (kEnableOptimizedReplication) {
+                bool IsWarmup = IsConnectionWarmingUp(Connection, NetworkTick);
 
-                if (ActorChannel->Actor)
-                    ScratchActorChannels[ActorChannel->Actor] = ActorChannel;
-            }
+                for (ReplicationCandidate& Candidate : ConsiderCache) {
+                    AActor* Actor = Candidate.Actor;
 
-            AActor* OwnedPawn = Connection->PlayerController ? Connection->PlayerController->Pawn : nullptr;
-            bool OwnedPawnReplicated = false;
-
-            for (ReplicationCandidate* Candidate : ReplicateList) {
-                AActor* Actor = Candidate->Actor;
-                OwnedPawnReplicated = OwnedPawnReplicated || Actor == OwnedPawn;
-
-                if (Candidate->IsPlayerController) {
-                    if (Actor != Connection->OwningActor)
+                    if (!IsActorReplicationCandidate(World, Actor))
                         continue;
 
-                    APlayerController* PlayerController = static_cast<APlayerController*>(Actor);
-                    Connection->ViewTarget = PlayerController->GetViewTarget();
-                    UpdateCamera(PlayerController);
+                    bool ShouldReplicate =
+                        IsWarmup
+                        || !kEnableReplicationThrottling
+                        || Candidate.IsCritical
+                        || IsConnectionCriticalActor(Actor, Connection)
+                        || ReplicateSet.contains(&Candidate);
+
+                    if (!ShouldReplicate)
+                        continue;
+
+                    ReplicateActorForConnection(Connection, Actor, Candidate.IsPlayerController, ChannelName, CreateChannelByName, SetChannelActor, ReplicateActor, UpdateCamera);
                 }
-
-                UActorChannel* ActorChannel = nullptr;
-                auto ActorChannelIt = ScratchActorChannels.find(Actor);
-
-                if (ActorChannelIt != ScratchActorChannels.end()) {
-                    ActorChannel = ActorChannelIt->second;
-                }
-                else {
-                    ActorChannel = CreateChannelByName(Connection, &ChannelName, OpenChannelFlag, -1);
-
-                    if (ActorChannel) {
-                        SetChannelActor(ActorChannel, Actor, 0);
-                        ScratchActorChannels[Actor] = ActorChannel;
-                    }
-                }
-
-                if (!ActorChannel || !ActorChannel->Actor)
-                    continue;
-
-                int& ReplicationFlags = *reinterpret_cast<int*>((uintptr_t)ActorChannel + OffsetActorChannelReplicationFlags);
-
-                if (!(ReplicationFlags & ReplicationFlagNeedsTick))
-                    ReplicationFlags |= ReplicationFlagNeedsTick;
-
-                ReplicateActor(ActorChannel);
-            }
-
-            if (!OwnedPawn || OwnedPawnReplicated || !IsCachedActorStillReplicatable(OwnedPawn))
-                continue;
-
-            UActorChannel* ActorChannel = nullptr;
-            auto ActorChannelIt = ScratchActorChannels.find(OwnedPawn);
-
-            if (ActorChannelIt != ScratchActorChannels.end()) {
-                ActorChannel = ActorChannelIt->second;
             }
             else {
-                ActorChannel = CreateChannelByName(Connection, &ChannelName, OpenChannelFlag, -1);
+                std::vector<ReplicationCandidate> Actors = BuildPlainConsiderList(World, NetDriver, ClassCache);
 
-                if (ActorChannel) {
-                    SetChannelActor(ActorChannel, OwnedPawn, 0);
-                    ScratchActorChannels[OwnedPawn] = ActorChannel;
+                for (ReplicationCandidate& Candidate : Actors) {
+                    ReplicateActorForConnection(Connection, Candidate.Actor, Candidate.IsPlayerController, ChannelName, CreateChannelByName, SetChannelActor, ReplicateActor, UpdateCamera);
                 }
             }
-
-            if (!ActorChannel || !ActorChannel->Actor)
-                continue;
-
-            int& ReplicationFlags = *reinterpret_cast<int*>((uintptr_t)ActorChannel + OffsetActorChannelReplicationFlags);
-
-            if (!(ReplicationFlags & ReplicationFlagNeedsTick))
-                ReplicationFlags |= ReplicationFlagNeedsTick;
-
-            ReplicateActor(ActorChannel);
         }
     }
 }
