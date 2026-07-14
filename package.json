@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "build:metagame": "pnpm --filter undauntedmetagame build",
+    "build:deploy": "pnpm --filter undaunteddeployserver build",
+    "build:servers": "pnpm --parallel --filter undauntedmetagame --filter undaunteddeployserver build"
+  },
+  "devDependencies": {}
+}
