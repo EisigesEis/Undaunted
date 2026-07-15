@@ -27,7 +27,8 @@ export const loadouts = sqliteTable("loadouts", {
     characterId: text("characterId").notNull().primaryKey(),
     userId: text("userId").notNull(),
     loadouts: text("loadouts").notNull(),
-    persistent: text("persistent").notNull()
+    persistent: text("persistent").notNull(),
+    activeIndex: integer("activeIndex").notNull().default(0)
 });
 
 export const gameserverapikeys = sqliteTable("gameserverapikeys", {
