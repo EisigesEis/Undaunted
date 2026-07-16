@@ -183,7 +183,7 @@ void EvalEndpointMap() {
         {L"EntitlementsEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementsv2"},
         {L"GrantEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlementv2/{accountid}"},
         {L"RevokeEntitlementEndpoint", L"http://" + Globals::MetagameAddress + L"/entitlement/{accountid}/{entitlement}"},
-        {L"ServiceSessionEndpoint", L"ws://" + Globals::MetagameAddress + L"/ws/{accountid}"},
+        {L"ServiceSessionEndpoint", L"ws://" + Globals::MetagameAddress + L"/xmpp"},
         {L"QueryUserPresenceEndpoint", L"http://" + Globals::MetagameAddress + L"/present/{accountid}"},
         {L"MatchmakingEndpoint", L"http://" + Globals::MetagameAddress},
         {L"TrackingEndpoint", L"http://" + Globals::MetagameAddress},
@@ -740,6 +740,7 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
 
     if (SectionName.contains(L"Mcp")) {
         const bool IsStompSection = SectionName.contains(L"StompServiceMcp");
+        const bool IsXmppSection = SectionName.contains(L"XMPP");
 
         if (KeyName.contains(L"protocol") || KeyName.contains(L"Protocol")) {
             *Value = FString(IsStompSection ? L"ws" : L"http");
@@ -748,6 +749,12 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
         }
         
         if (KeyName.contains(L"Domain")) {
+            if (IsXmppSection) {
+                *Value = FString(L"prod.ol.epicgames.com");
+
+                return true;
+            }
+
             *Value = FString(Globals::MetagameAddress.c_str());
 
             return true;
