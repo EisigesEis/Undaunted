@@ -131,7 +131,7 @@ loadoutRouter.post("/loadout/:userId/:characterId/unlock/:slots", HasUndauntedMe
     const CharacterId = req.params.characterId;
     const RequestedSlots = parseRouteInteger(req.params.slots);
 
-    if(RequestedSlots == undefined){
+    if(RequestedSlots == undefined || RequestedSlots < 1 || RequestedSlots > MAX_UNLOCKED_LOADOUT_SLOTS){
         sendEmptyError(res);
         return;
     }

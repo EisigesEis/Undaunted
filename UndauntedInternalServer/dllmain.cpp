@@ -699,18 +699,57 @@ bool DidDoTravelReset = false;
 
 void* OrigProcessEvent = nullptr;
 
+// TODO: Somewhere the game calls unlock loadout slots with bogus url like 16242342...
+// Find out why that is maybe? For now suppressing.
+static bool ShouldSuppressInvalidLoadoutSlotUnlock(UFunction* Function, void* Parms) {
+    static UFunction* UnlockLoadoutSlotsFunction = nullptr;
+    static UFunction* UnlockLoadoutSlotsCheatFunction = nullptr;
+    constexpr int32_t MaxLoadoutSlots = 6;
+
+    if (Function == nullptr || Parms == nullptr) {
+        return false;
+    }
+
+    const std::string FunctionName = Function->GetName();
+
+    if (Function == UnlockLoadoutSlotsFunction || (!UnlockLoadoutSlotsFunction && FunctionName == "UnlockLoadoutSlots")) {
+        UnlockLoadoutSlotsFunction = Function;
+
+        const auto* UnlockParams = (Params::ArchonLoadout_UnlockLoadoutSlots*)Parms;
+        if (UnlockParams->InNumSlots < 1 || UnlockParams->InNumSlots > MaxLoadoutSlots) {
+            std::cout << "[Loadout] Suppressed invalid UnlockLoadoutSlots count " << UnlockParams->InNumSlots << std::endl;
+            return true;
+        }
+    }
+    else if (Function == UnlockLoadoutSlotsCheatFunction || (!UnlockLoadoutSlotsCheatFunction && FunctionName == "UnlockLoadoutSlotsCheat")) {
+        UnlockLoadoutSlotsCheatFunction = Function;
+
+        const auto* UnlockParams = (Params::ArchonLoadout_UnlockLoadoutSlotsCheat*)Parms;
+        if (UnlockParams->InNumSlots < 1 || UnlockParams->InNumSlots > MaxLoadoutSlots) {
+            std::cout << "[Loadout] Suppressed invalid UnlockLoadoutSlotsCheat count " << UnlockParams->InNumSlots << std::endl;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
     static UFunction* ServerTryActivateAbilityWithEventData = nullptr;
     static UFunction* ServerTryActivateAbility = nullptr;
 
-    if (Function == ServerTryActivateAbilityWithEventData || (!ServerTryActivateAbilityWithEventData && Function->GetFullName().contains("ServerTryActivateAbilityWithEventData"))) {
+    if (ShouldSuppressInvalidLoadoutSlotUnlock(Function, Parms)) {
+        return;
+    }
+
+    if (Function == ServerTryActivateAbilityWithEventData || (!ServerTryActivateAbilityWithEventData && Function->GetName() == "ServerTryActivateAbilityWithEventData")) {
         ServerTryActivateAbilityWithEventData = Function;
 
         Params::AbilitySystemComponent_ServerTryActivateAbilityWithEventData* ActivateAbilityParams = (Params::AbilitySystemComponent_ServerTryActivateAbilityWithEventData*)Parms;
 
         ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, &ActivateAbilityParams->TriggerEventData);
     }
-    else if (Function == ServerTryActivateAbility || (!ServerTryActivateAbility && Function->GetFullName().contains("ServerTryActivateAbility"))) {
+    else if (Function == ServerTryActivateAbility || (!ServerTryActivateAbility && Function->GetName() == "ServerTryActivateAbility")) {
         ServerTryActivateAbility = Function;
 
         Params::AbilitySystemComponent_ServerTryActivateAbility* ActivateAbilityParams = (Params::AbilitySystemComponent_ServerTryActivateAbility*)Parms;
