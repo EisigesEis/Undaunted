@@ -478,6 +478,19 @@ static bool ShouldAttemptListen(float DeltaTime) {
     return false;
 }
 
+static bool ShouldTickStaminaForServer() {
+    static bool Initialized = false;
+    static bool ShouldTick = true;
+
+    if (!Initialized) {
+        const std::wstring MapPath = Globals::MapPath != nullptr ? std::wstring(Globals::MapPath) : L"";
+        ShouldTick = !MapPath.contains(L"/Maps/ramsgate/");
+        Initialized = true;
+    }
+
+    return ShouldTick;
+}
+
 void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender) {
     reinterpret_cast<void(*)(UGameEngine*, float, char)>(OrigGameEngineTick)(GameEngine, DeltaTime, CanRender);
 
@@ -514,9 +527,11 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
             }
         }
 
+        if (ShouldTickStaminaForServer()) {
         for (UNetConnection* Conn : Networking::NetDriver->ClientConnections) {
             if (Conn->PlayerController && Conn->PlayerController->Pawn) {
                 ((ABP_PlayerCharacter_C*)Conn->PlayerController->Pawn)->TickStamina(ECityExecFilter::Both, ERemoteExecFilter::All); // TODO: Risky cast, but IsA brutalizes our speed
+                }
             }
         }
     }
@@ -841,6 +856,10 @@ void InitClientHooks() {
     MH_CreateHook((void*)(Globals::BaseAddress + 0x14F2A30), GetEscalationSeason, &OrigGetEscalationSeason);
 
     MH_EnableHook((void*)(Globals::BaseAddress + 0x14F2A30));
+
+    MH_CreateHook((void*)(Globals::BaseAddress + 0x3307100), GameEngineTickHook, &OrigGameEngineTick);
+
+    MH_EnableHook((void*)(Globals::BaseAddress + 0x3307100));
 
     //
 
