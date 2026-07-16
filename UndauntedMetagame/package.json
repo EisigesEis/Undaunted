@@ -6,7 +6,7 @@
   "author": "gwog :3",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/server.ts",
-    "build": "tsc",
+    "build": "esbuild ./src/server.ts --bundle --platform=node --target=es2022 --format=cjs --packages=external --minify --legal-comments=none --outfile=dist/server.js",
     "test:xmpp": "tsx src/xmpp/selftest.ts",
     "test:stomp": "tsx src/stomp/selftest.ts",
     "test:friends": "tsx src/selftests/friends.ts",
@@ -32,6 +32,7 @@
     "@types/node": "26.0.0",
     "@types/ws": "^8.18.1",
     "drizzle-kit": "0.31.10",
+    "esbuild": "0.28.1",
     "tsx": "4.22.4",
     "typescript": "6.0.3"
   }

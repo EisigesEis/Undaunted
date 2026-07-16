@@ -8,3 +8,4 @@ yarn.lock
 *.tsbuildinfo
 *.db-shm
 *.db-wal
+.tmp
