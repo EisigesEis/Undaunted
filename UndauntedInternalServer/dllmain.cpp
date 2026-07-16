@@ -17,6 +17,7 @@
 #include "constants.h"
 #include "Networking.h"
 #include "Hooks/NativeNameCleanup.h"
+#include "TrialsBrowser/TrialsBrowserOverlay.h"
 
 #include "SDK/GameplayAbilities_parameters.hpp"
 #include "SDK/Archon_parameters.hpp"
@@ -39,6 +40,12 @@ namespace Globals {
     std::wstring ReadyCallbackUrl;
     std::wstring ReadyCallbackToken;
     std::wstring MetagameAddress;
+    std::wstring ServerAPIKeyValue;
+    std::wstring MapPathValue;
+    std::wstring BehemothPathValue;
+    std::wstring MatchmakerHuntIdValue;
+    std::wstring ExpectedPlayerStringValue;
+    std::wstring MyIpAndPortValue;
 
     bool EnableLogging = true;
 }
@@ -494,6 +501,11 @@ static bool ShouldTickStaminaForServer() {
 void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender) {
     reinterpret_cast<void(*)(UGameEngine*, float, char)>(OrigGameEngineTick)(GameEngine, DeltaTime, CanRender);
 
+    if (!Globals::AmServer) {
+        UObject* WorldContext = UWorld::GetWorld();
+        TrialsBrowserOverlay::Tick(WorldContext != nullptr ? WorldContext : GameEngine);
+    }
+
     if (Globals::Listening) {
         Networking::TickNetworking();
     }
@@ -528,9 +540,9 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
         }
 
         if (ShouldTickStaminaForServer()) {
-        for (UNetConnection* Conn : Networking::NetDriver->ClientConnections) {
-            if (Conn->PlayerController && Conn->PlayerController->Pawn) {
-                ((ABP_PlayerCharacter_C*)Conn->PlayerController->Pawn)->TickStamina(ECityExecFilter::Both, ERemoteExecFilter::All); // TODO: Risky cast, but IsA brutalizes our speed
+            for (UNetConnection* Conn : Networking::NetDriver->ClientConnections) {
+                if (Conn->PlayerController && Conn->PlayerController->Pawn) {
+                    ((ABP_PlayerCharacter_C*)Conn->PlayerController->Pawn)->TickStamina(ECityExecFilter::Both, ERemoteExecFilter::All); // TODO: Risky cast, but IsA brutalizes our speed
                 }
             }
         }
@@ -680,35 +692,6 @@ bool MakeDoDamageHook(void* a1, void* a2, void* a3) {
     return true;
 }
 
-#include <fstream>
-
-void* OrigProcessEventClient = nullptr;
-
-void ProcessEventClientHook(UObject* Object, UFunction* Function, void* Parms) {
-    if (GetAsyncKeyState(VK_F7)) {
-        for (int i = 0; i < SDK::UObject::GObjects->Num(); i++)
-        {
-            SDK::UObject* Obj = SDK::UObject::GObjects->GetByIndex(i);
-
-            if (!Obj)
-                continue;
-
-            if (Obj->IsA(SDK::UArenaMapHuntsFeature::StaticClass()))
-            {
-                UArenaMapHuntsFeature* Quest = (UArenaMapHuntsFeature*)Obj;
-
-                std::cout << Quest->bEnabled << std::endl;
-            }
-        }
-
-        while (GetAsyncKeyState(VK_F7)) {
-
-        }
-    }
-
-    reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEventClient)(Object, Function, Parms);
-}
-
 static int NumTimesOnAirshipUpdated = 0;
 bool DidDoTravelReset = false;
 
@@ -773,6 +756,7 @@ void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
     }
 
     reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEvent)(Object, Function, Parms);
+
 }
 
 void* OrigConfigCacheIniGetString = nullptr;
@@ -878,9 +862,7 @@ void InitClientHooks() {
         NativeNameCleanup::Init();
     }
 
-    //MH_CreateHook((void*)(Globals::BaseAddress + 0x1F61820), ProcessEventClientHook, &OrigProcessEventClient);
-
-    //MH_EnableHook((void*)(Globals::BaseAddress + 0x1F61820));
+    TrialsBrowserOverlay::Start();
 
    // MH_CreateHook((void*)(Globals::BaseAddress + 0x3077710), GetActorCallspace, &OrigGetActorCallspace);
 
@@ -1094,14 +1076,19 @@ void Init() {
         wchar_t** Args = CommandLineToArgvW(GetCommandLineW(), &NumArgs);
 
         if (NumArgs > 8) {
-            Globals::ServerAPIKey = Args[1];
+            Globals::ServerAPIKeyValue = Args[1];
             Globals::Port = std::stoi(std::wstring(Args[2]));
-            Globals::MapPath = Args[3];
-            Globals::BehemothPath = Args[4];
-            Globals::MatchmakerHuntId = Args[5];
-            Globals::ExpectedPlayerString = Args[6];
-            Globals::MyIpAndPort = Args[7];
-
+            Globals::MapPathValue = Args[3];
+            Globals::BehemothPathValue = Args[4];
+            Globals::MatchmakerHuntIdValue = Args[5];
+            Globals::ExpectedPlayerStringValue = Args[6];
+            Globals::MyIpAndPortValue = Args[7];
+            Globals::ServerAPIKey = Globals::ServerAPIKeyValue.c_str();
+            Globals::MapPath = Globals::MapPathValue.c_str();
+            Globals::BehemothPath = Globals::BehemothPathValue.c_str();
+            Globals::MatchmakerHuntId = Globals::MatchmakerHuntIdValue.c_str();
+            Globals::ExpectedPlayerString = Globals::ExpectedPlayerStringValue.c_str();
+            Globals::MyIpAndPort = Globals::MyIpAndPortValue.c_str();
             if (NumArgs > 11 && Args[8][0] != L'-') {
                 Globals::GameserverId = Args[8];
                 Globals::ReadyCallbackUrl = Args[9];
@@ -1112,8 +1099,12 @@ void Init() {
                 EnableWatchdog = false;
                 Globals::EnableLogging = true;
             }
+
+            LocalFree(Args);
         }
         else {
+            if (Args != nullptr)
+                LocalFree(Args);
             MessageBoxA(nullptr, "INVALID GAMESERVER ARGS", "INVALID GAMESERVER ARGS", 0);
             exit(0);
             return;
@@ -1155,12 +1146,16 @@ void Init() {
         wchar_t** Args = CommandLineToArgvW(GetCommandLineW(), &NumArgs);
 
         Globals::MetagameAddress = FindClientMetagameAddress(Args, NumArgs);
+        if (Args != nullptr)
+            LocalFree(Args);
 
         InitClientHooks();
     }
 
     DWORD threadId;
-    CreateThread(nullptr, 0x1000, (LPTHREAD_START_ROUTINE)MainThread, nullptr, 0, &threadId);
+    HANDLE Thread = CreateThread(nullptr, 0x1000, (LPTHREAD_START_ROUTINE)MainThread, nullptr, 0, &threadId);
+    if (Thread != nullptr)
+        CloseHandle(Thread);
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,

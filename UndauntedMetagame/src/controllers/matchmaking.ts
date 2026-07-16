@@ -23,7 +23,8 @@ type MatchmakingQueueData = {
     Groups: string[][],
     Players: string[],
     LastPlayerAddedTime: Date,
-    Resolved: boolean
+    Resolved: boolean,
+    FreshInstance: boolean
 };
 
 export type MatchmakingSession = {
@@ -71,6 +72,11 @@ let MatchmakingSessionMap: Map<string, MatchmakingSession> = new Map<string, Mat
 
 function HuntIdRequiresMatchmaking(HuntId: string | undefined){
     return HuntId != undefined && !HuntId.includes("Ramsgate") && !HuntId.includes("Dojo");
+}
+
+function IsTrialsHuntId(HuntId: string | undefined){
+    return HuntId?.startsWith("Trials_PlayerHunt_") === true
+        || HuntId?.startsWith("CR19_PlayerHunt_Arena_") === true;
 }
 
 function CreateMatchmakingSession(PlayerId: string, PlayerIds: string[], PartyId: string | undefined, PrivateMatch: boolean, GameMode: string, GameArgs: string, HuntId: string, Phase: MatchmakingPhase): MatchmakingSession{
@@ -199,11 +205,12 @@ function ExpireStaleSession(Session: MatchmakingSession){
     return false;
 }
 
-async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined): Promise<LaunchGameResult>{
+async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined, FreshInstance = false): Promise<LaunchGameResult>{
     logger.info({
         gameMode: GameMode,
         huntId: HuntId,
-        expectedPlayers: ExpectedPlayers ?? []
+        expectedPlayers: ExpectedPlayers ?? [],
+        freshInstance: FreshInstance
     }, "Requesting deploy server matchmaking");
 
     const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_MATCHMAKING_PATH;
@@ -220,7 +227,8 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
                 GameMode: GameMode,
                 GameArgs: GameArgs,
                 HuntId: HuntId,
-                ExpectedPlayers: ExpectedPlayers
+                ExpectedPlayers: ExpectedPlayers,
+                FreshInstance: FreshInstance
             }),
             signal: AbortSignal.timeout(DEPLOYSERVER_MATCHMAKING_TIMEOUT_MS)
         });
@@ -345,8 +353,9 @@ async function PopQueue(HuntId: string, MatchmakingQueue: MatchmakingQueueData |
         gameMode: MatchmakingQueue.GameMode,
         gameArgs: MatchmakingQueue.GameArgs,
         groups: MatchmakingQueue.Groups,
-        players: MatchmakingQueue.Players,
-        queueAgeMs: Date.now() - MatchmakingQueue.LastPlayerAddedTime.getTime()
+            players: MatchmakingQueue.Players,
+            freshInstance: MatchmakingQueue.FreshInstance,
+            queueAgeMs: Date.now() - MatchmakingQueue.LastPlayerAddedTime.getTime()
     }, "Starting matchmaking queue");
 
     for(const Session of UniqueSessionsForPlayers(MatchmakingQueue.Players)){
@@ -359,7 +368,7 @@ async function PopQueue(HuntId: string, MatchmakingQueue: MatchmakingQueueData |
         await SyncMatchmakingActivity(Session);
     }
     
-    const GameOnDeployServer = await LaunchGameOnDeployserver(MatchmakingQueue.GameMode, MatchmakingQueue.GameArgs, HuntId, MatchmakingQueue.Players);
+    const GameOnDeployServer = await LaunchGameOnDeployserver(MatchmakingQueue.GameMode, MatchmakingQueue.GameArgs, HuntId, MatchmakingQueue.Players, MatchmakingQueue.FreshInstance);
 
     for(const Session of UniqueSessionsForPlayers(MatchmakingQueue.Players)){
         if(Session.cancelled){
@@ -630,14 +639,15 @@ function FindJoinableQueue(HuntId: string, GameMode: string, GameArgs: string, G
         && Queue.Players.length + GroupSize <= 4);
 }
 
-function CreateQueue(HuntId: string, GameMode: string, GameArgs: string, PlayerIds: string[]){
+function CreateQueue(HuntId: string, GameMode: string, GameArgs: string, PlayerIds: string[], FreshInstance: boolean){
     const Queue = {
         GameMode: GameMode,
         GameArgs: GameArgs,
         Groups: [[...PlayerIds]],
         Players: [...PlayerIds],
         LastPlayerAddedTime: new Date(),
-        Resolved: false
+        Resolved: false,
+        FreshInstance: FreshInstance
     };
 
     const Queues = MatchmakingQueueMap.get(HuntId) ?? [];
@@ -654,12 +664,13 @@ function CreateQueue(HuntId: string, GameMode: string, GameArgs: string, PlayerI
     return Queue;
 }
 
-async function QueueGroup(HuntId: string, PlayerId: string, PlayerIds: string[], PartyId: string | undefined, GameMode: string, GameArgs: string){
+async function QueueGroup(HuntId: string, PlayerId: string, PlayerIds: string[], PartyId: string | undefined, GameMode: string, GameArgs: string, FreshInstance: boolean){
     const Session = CreateMatchmakingSession(PlayerId, PlayerIds, PartyId, false, GameMode, GameArgs, HuntId, "QUEUED");
     RegisterSessionForPlayers(Session);
     let ActiveQueue = FindJoinableQueue(HuntId, GameMode, GameArgs, PlayerIds.length);
 
     if(ActiveQueue != undefined){
+        ActiveQueue.FreshInstance ||= FreshInstance;
         ActiveQueue.Groups.push([...PlayerIds]);
         ActiveQueue.Players.push(...PlayerIds);
         ActiveQueue.LastPlayerAddedTime = new Date();
@@ -678,7 +689,7 @@ async function QueueGroup(HuntId: string, PlayerId: string, PlayerIds: string[],
         }
     }
     else{
-        ActiveQueue = CreateQueue(HuntId, GameMode, GameArgs, PlayerIds);
+        ActiveQueue = CreateQueue(HuntId, GameMode, GameArgs, PlayerIds, FreshInstance);
 
         if(MATCHMAKING_QUEUE_WAIT_MS <= 0){
             await PopQueue(HuntId, ActiveQueue);
@@ -714,8 +725,8 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
         return undefined;
     }
 
-    const NormalizedHuntId = HuntId ?? "";
     const NormalizedGameArgs = GameArgs ?? "";
+    const NormalizedHuntId = HuntId ?? "";
     const Group = ResolveMatchmakingGroup(PlayerId, Options.partyId);
     logger.info({
         userId: PlayerId,
@@ -723,11 +734,31 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
         requestedPartyId: Options.partyId,
         playerIds: Group.playerIds,
         gameMode: GameMode,
+        requestedHuntId: HuntId,
         huntId: NormalizedHuntId,
         privateMatch: Options.privateMatch === true
     }, "Handling matchmaking join");
     const PrivateMatch = Options.privateMatch === true;
-    const ReusableSession = await TryReuseActiveSession(PlayerId, GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds, PrivateMatch);
+    const ExistingSession = MatchmakingSessionMap.get(PlayerId);
+    const FreshInstance = ExistingSession?.phase === "READY"
+        && IsTrialsHuntId(ExistingSession.huntId)
+        && IsTrialsHuntId(NormalizedHuntId);
+
+    if(FreshInstance){
+        MarkSessionExpired(ExistingSession, "trial_retry_requires_fresh_instance");
+        await SyncMatchmakingActivity(ExistingSession);
+        RemoveSession(ExistingSession, "trial_retry_requires_fresh_instance");
+        logger.info({
+            previousCandidateId: ExistingSession.candidateId,
+            playerIds: Group.playerIds,
+            previousHuntId: ExistingSession.huntId,
+            huntId: NormalizedHuntId
+        }, "Trials retry requires a fresh gameserver instance");
+    }
+
+    const ReusableSession = FreshInstance
+        ? undefined
+        : await TryReuseActiveSession(PlayerId, GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds, PrivateMatch);
 
     if(ReusableSession != undefined){
         return ReusableSession;
@@ -746,7 +777,7 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
         }, "Starting direct matchmaking session");
         await SyncMatchmakingActivity(Session);
 
-        const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds);
+        const GameOnDeployServer = await LaunchGameOnDeployserver(GameMode, NormalizedGameArgs, NormalizedHuntId, Group.playerIds, FreshInstance);
 
         if(Session.cancelled){
             return undefined;
@@ -764,7 +795,7 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
         return GameOnDeployServer.succeeded ? Session : undefined;
     }
 
-    return await QueueGroup(NormalizedHuntId, PlayerId, Group.playerIds, Group.partyId, GameMode, NormalizedGameArgs);
+    return await QueueGroup(NormalizedHuntId, PlayerId, Group.playerIds, Group.partyId, GameMode, NormalizedGameArgs, FreshInstance);
 }
 
 export async function MarkMatchmakingHeartbeat(PlayerId: string){
@@ -901,6 +932,7 @@ export function GetMatchmakingDebugData(){
             gameArgs: Queue.GameArgs,
             groups: Queue.Groups,
             players: Queue.Players,
+            freshInstance: Queue.FreshInstance,
             lastPlayerAddedTime: Queue.LastPlayerAddedTime.toISOString(),
             resolved: Queue.Resolved
         })))

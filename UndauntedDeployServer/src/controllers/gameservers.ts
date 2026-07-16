@@ -14,6 +14,14 @@ import { kill } from "node:process";
 const RAMSGATE_MAP_PATH = "/Game/Maps/ramsgate/ramsgate_01_persistent";
 const TRAINING_DOJO_MAP_PATH = "/Game/Maps/islands/dojo/training_dojo_persistent";
 const TRIALS_MAP_PATH = "/Game/Maps/islands/arenas/arena_ramsgate_00";
+const GAMESERVER_PORT_RELEASE_TIMEOUT_MS = Number(process.env.GAMESERVER_PORT_RELEASE_TIMEOUT_MS || "5000");
+
+class NoFreeHuntPortsError extends Error {
+    constructor(){
+        super("No free ports left!");
+        this.name = "NoFreeHuntPortsError";
+    }
+}
 
 export type Gameserver = {
     id: string,
@@ -192,6 +200,18 @@ async function IsUdpPortInUse(Port: number){
         Socket.once("listening", () => Finish(false));
         Socket.bind(Port, "0.0.0.0");
     });
+}
+
+async function WaitForUdpPortRelease(Port: number){
+    const Deadline = Date.now() + GAMESERVER_PORT_RELEASE_TIMEOUT_MS;
+
+    while(await IsUdpPortInUse(Port)){
+        if(Date.now() >= Deadline){
+            throw new Error(`Timed out waiting for gameserver UDP port ${Port} to be released`);
+        }
+
+        await setTimeout(50);
+    }
 }
 
 function IsProcessAlive(ProcessId: number){
@@ -447,6 +467,16 @@ async function CleanupFailedStartup(NewGameserver: Gameserver, Options: StartSer
 }
 
 export async function ShutdownServer(ServerToShutdown: Gameserver, Reason: string){
+    if(ServerToShutdown.expectedShutdownReason != undefined){
+        logger.debug({
+            serverId: ServerToShutdown.id,
+            port: ServerToShutdown.port,
+            existingReason: ServerToShutdown.expectedShutdownReason,
+            ignoredReason: Reason
+        }, "Gameserver shutdown already in progress");
+        return;
+    }
+
     logger.info(`Shutting down gameserver ${ServerToShutdown.processId} on port ${ServerToShutdown.port} (${ServerToShutdown.origin}) due to ${Reason}`);
     ServerToShutdown.expectedShutdownReason = Reason;
 
@@ -455,6 +485,10 @@ export async function ShutdownServer(ServerToShutdown: Gameserver, Reason: strin
     }
     catch(Error){
         logger.warn(Error, `Failed to signal gameserver ${ServerToShutdown.processId} on port ${ServerToShutdown.port}`);
+    }
+
+    if(!ServerToShutdown.isRamsgate && !ServerToShutdown.isTrainingDojo){
+        await WaitForUdpPortRelease(ServerToShutdown.port);
     }
 
     await CleanupServer(ServerToShutdown);
@@ -505,7 +539,7 @@ async function StartServer(Options: StartServerOptions){
     const Id = crypto.randomUUID();
 
     if(Port == undefined){
-        throw new Error("No free ports left!");
+        throw new NoFreeHuntPortsError();
     }
 
     if((Options.isRamsgate || Options.isTrainingDojo) && await IsUdpPortInUse(Port)){
@@ -675,7 +709,52 @@ export function GetTrainingDojoConnectionDetails(){
 }
 
 function FindGameserverForPlayer(PlayerId: string){
-    return Gameservers.find((Candidate) => Candidate.expectedPlayers?.some((Player) => Player.playerUid === PlayerId));
+    for(let Index = Gameservers.length - 1; Index >= 0; Index--){
+        const Candidate = Gameservers[Index];
+        if(Candidate.expectedShutdownReason == undefined
+            && Candidate.expectedPlayers?.some((Player) => Player.playerUid === PlayerId)){
+            return Candidate;
+        }
+    }
+
+    return undefined;
+}
+
+function FindHuntGameserversForPlayers(PlayerIds: string[]){
+    const Players = new Set(PlayerIds);
+    return Gameservers.filter((Candidate) =>
+        !Candidate.isRamsgate
+        && !Candidate.isTrainingDojo
+        && Candidate.expectedShutdownReason == undefined
+        && Candidate.expectedPlayers?.some((Player) => Players.has(Player.playerUid)));
+}
+
+function DetachPlayersFromGameservers(Servers: Gameserver[], PlayerIds: string[]){
+    const Players = new Set(PlayerIds);
+
+    for(const Server of Servers){
+        Server.expectedPlayers = Server.expectedPlayers?.filter((Player) => !Players.has(Player.playerUid));
+    }
+}
+
+function RetireReplacedGameservers(Servers: Gameserver[], PlayerIds: string[], Replacement: Gameserver){
+    if(Servers.length === 0){
+        return;
+    }
+
+    DetachPlayersFromGameservers(Servers, PlayerIds);
+    logger.info({
+        replacementServerId: Replacement.id,
+        replacementPort: Replacement.port,
+        playerIds: PlayerIds,
+        retiredServers: Servers.map((Server) => ({id: Server.id, port: Server.port, processId: Server.processId}))
+    }, "Retiring gameservers replaced by a fresh instance");
+
+    for(const Server of Servers){
+        void ShutdownServer(Server, `replaced_by_fresh_instance:${Replacement.id}`).catch((Error) => {
+            logger.error(Error, `Failed to retire replaced gameserver ${Server.id} on port ${Server.port}`);
+        });
+    }
 }
 
 export async function GetGameserverStatusForPlayer(PlayerId: string){
@@ -794,7 +873,7 @@ export async function StartupGameserverWithArgs(GameArgs: string, ExpectedPlayer
 }
 
 function GetMatchmakerHuntIdFromPlayerHuntId(PlayerHuntId: string){
-    const MatchmakerHuntIDs = (PlayerHuntTable[0].Rows as any)[PlayerHuntId].MatchmakerHuntIDs;
+    const MatchmakerHuntIDs = PLAYER_HUNT_ROWS[PlayerHuntId].MatchmakerHuntIDs;
 
     let MatchmakerHuntObject;
 
@@ -806,13 +885,13 @@ function GetMatchmakerHuntIdFromPlayerHuntId(PlayerHuntId: string){
 }
 
 function GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId: string): string{
-    const MatchmakerHuntObject = (MatchmakerHuntTable[0].Rows as any)[MatchmakerHuntId];
+    const MatchmakerHuntObject = MATCHMAKER_HUNT_ROWS[MatchmakerHuntId];
 
     return MatchmakerHuntObject.SpecificBehemoth.BehemothAsset.AssetPathName;
 }
 
 function GetMapPathFromMatchmakerHuntId(MatchmakerHuntId: string): string{
-    const MatchmakerHuntObject = (MatchmakerHuntTable[0].Rows as any)[MatchmakerHuntId];
+    const MatchmakerHuntObject = MATCHMAKER_HUNT_ROWS[MatchmakerHuntId];
 
     const MapList = MatchmakerHuntObject.MapList;
 
@@ -820,38 +899,165 @@ function GetMapPathFromMatchmakerHuntId(MatchmakerHuntId: string): string{
 }
 
 function GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId: string): string{
-    const MatchmakerHuntObject = (MatchmakerHuntTable[0].Rows as any)[MatchmakerHuntId];
+    const MatchmakerHuntObject = MATCHMAKER_HUNT_ROWS[MatchmakerHuntId];
 
     return MatchmakerHuntObject.GameModeOverride.replaceAll("Archon/Content", "/Game");
 }
 
-type TrialsData = {
+type TrialData = {
     Behemoth: string;
     TrialsHuntId: string;
 }
 
-function RandomlyGenTrialsData(IsElite: boolean): TrialsData{
+const TRIAL_HUNT_ID_REGEX = /^Arena_MatchmakerHunt_(Hard|Elite)_(\d{3})$/;
+const TRIAL_PLAYER_HUNT_ID_REGEX = /^(Trials_PlayerHunt_(Hard|Elite)_(\d{3}))(?:_(?:Day|Night))?$/;
+const TRIALS_HARD_ROWS = TrialsHardHuntTable[0].Rows as any;
+const TRIALS_ELITE_ROWS = TrialsEliteHuntTable[0].Rows as any;
+const PLAYER_HUNT_ROWS = PlayerHuntTable[0].Rows as any;
+const MATCHMAKER_HUNT_ROWS = MatchmakerHuntTable[0].Rows as any;
+const TRIAL_ROWS = {
+    Hard: TRIALS_HARD_ROWS,
+    Elite: TRIALS_ELITE_ROWS
+} as const;
+let TrialByHuntId: Map<string, TrialData> | undefined;
+let DisplayHuntByBehemoth: Map<string, string> | undefined;
+
+function MakeTrial(TrialsHuntId: string, Row: any): TrialData{
+    return {
+        Behemoth: Row.SpecificBehemoth.BehemothAsset.AssetPathName,
+        TrialsHuntId: TrialsHuntId
+    };
+}
+
+function GetTrialIndex(){
+    if(TrialByHuntId != undefined){
+        return TrialByHuntId;
+    }
+
+    TrialByHuntId = new Map<string, TrialData>();
+
+    for(const [Difficulty, Rows] of Object.entries(TRIAL_ROWS)){
+        for(const [TrialsHuntId, Row] of Object.entries(Rows)){
+            const Match = TRIAL_HUNT_ID_REGEX.exec(TrialsHuntId);
+
+            if(Match == undefined || Match[1] !== Difficulty){
+                continue;
+            }
+
+            const Data = MakeTrial(TrialsHuntId, Row);
+            TrialByHuntId.set(TrialsHuntId, Data);
+            TrialByHuntId.set(`Trials_PlayerHunt_${Difficulty}_${Match[2]}`, Data);
+        }
+    }
+
+    TrialByHuntId.set("CR19_PlayerHunt_Arena_Hard", TrialByHuntId.get("Arena_MatchmakerHunt_Hard_001")!);
+    TrialByHuntId.set("CR19_PlayerHunt_Arena_Elite", TrialByHuntId.get("Arena_MatchmakerHunt_Elite_001")!);
+
+    logger.info({
+        huntIdCount: TrialByHuntId.size
+    }, "Indexed trials hunt ids");
+
+    return TrialByHuntId;
+}
+
+function ResolveTrial(PlayerHuntId: string): TrialData | undefined{
+    const AliasMatch = TRIAL_PLAYER_HUNT_ID_REGEX.exec(PlayerHuntId);
+    const BasePlayerHuntId = AliasMatch?.[1] ?? PlayerHuntId;
+    const Trial = GetTrialIndex().get(BasePlayerHuntId);
+
+    if(Trial != undefined)
+        return Trial;
+
+    return PlayerHuntId.includes("Arena") ? RandomlyGenTrialsData(PlayerHuntId.includes("Elite")) : undefined;
+}
+
+function GetMatchmakerBehemothAssetPath(MatchmakerHuntId: string): string | undefined{
+    const MatchmakerHuntObject = MATCHMAKER_HUNT_ROWS[MatchmakerHuntId];
+    const BehemothAssetPath = MatchmakerHuntObject?.SpecificBehemoth?.BehemothAsset?.AssetPathName;
+
+    return typeof BehemothAssetPath === "string" ? BehemothAssetPath : undefined;
+}
+
+function GetPlayerHuntMatchmakerIds(PlayerHunt: any): string[]{
+    const MatchmakerHuntIDs = PlayerHunt?.MatchmakerHuntIDs;
+
+    if(!Array.isArray(MatchmakerHuntIDs)){
+        return [];
+    }
+
+    return MatchmakerHuntIDs
+        .map((MatchmakerHuntID: any) => MatchmakerHuntID?.RowName)
+        .filter((MatchmakerHuntId: any): MatchmakerHuntId is string => typeof MatchmakerHuntId === "string");
+}
+
+function GetDisplayHuntIndex(){
+    if(DisplayHuntByBehemoth != undefined){
+        return DisplayHuntByBehemoth;
+    }
+
+    DisplayHuntByBehemoth = new Map<string, string>();
+
+    for(const [PlayerHuntId, PlayerHunt] of Object.entries(PLAYER_HUNT_ROWS)){
+        for(const MatchmakerHuntId of GetPlayerHuntMatchmakerIds(PlayerHunt)){
+            const BehemothAssetPath = GetMatchmakerBehemothAssetPath(MatchmakerHuntId);
+
+            if(BehemothAssetPath == undefined || BehemothAssetPath.trim().length === 0){
+                continue;
+            }
+
+            const ExistingPlayerHuntId = DisplayHuntByBehemoth.get(BehemothAssetPath);
+            const IsPreferredPursuit = PlayerHuntId.startsWith("CR19_PlayerHunt_Pursuit_");
+            const HasPreferredPursuit = ExistingPlayerHuntId?.startsWith("CR19_PlayerHunt_Pursuit_") === true;
+
+            if(ExistingPlayerHuntId == undefined || (IsPreferredPursuit && !HasPreferredPursuit)){
+                DisplayHuntByBehemoth.set(BehemothAssetPath, PlayerHuntId);
+            }
+        }
+    }
+
+    logger.info({
+        behemothCount: DisplayHuntByBehemoth.size
+    }, "Indexed trial display player hunts");
+
+    return DisplayHuntByBehemoth;
+}
+
+function GetDisplayHuntId(Trial: TrialData | undefined): string | undefined{
+    if(Trial == undefined || Trial.Behemoth.trim().length === 0){
+        return undefined;
+    }
+
+    return GetDisplayHuntIndex().get(Trial.Behemoth);
+}
+
+function GetExpectedHuntId(Trial: TrialData | undefined, FallbackPlayerHuntId: string){
+    const DisplayPlayerHuntId = GetDisplayHuntId(Trial);
+
+    if(Trial != undefined && DisplayPlayerHuntId == undefined){
+        logger.warn(`No canonical display player hunt found for trial ${Trial.TrialsHuntId}; falling back to ${FallbackPlayerHuntId}`);
+    }
+
+    return DisplayPlayerHuntId ?? FallbackPlayerHuntId;
+}
+
+function RandomlyGenTrialsData(IsElite: boolean): TrialData{
     const RandomTrialNum = String(crypto.randomInt(1, 89)).padStart(3, "0");
 
     const Difficulty = IsElite ? "Elite" : "Hard";
 
     const TrialsHuntId = `Arena_MatchmakerHunt_${Difficulty}_${RandomTrialNum}`;
 
-    const Row = IsElite ? (TrialsEliteHuntTable[0].Rows as any)[TrialsHuntId] : (TrialsHardHuntTable[0].Rows as any)[TrialsHuntId];
+    const Row = IsElite ? TRIALS_ELITE_ROWS[TrialsHuntId] : TRIALS_HARD_ROWS[TrialsHuntId];
 
-    const Behemoth = Row.SpecificBehemoth.BehemothAsset.AssetPathName;
-
-    return {
-        Behemoth: Behemoth,
-        TrialsHuntId: TrialsHuntId
-    };
+    return MakeTrial(TrialsHuntId, Row);
 }
 
-export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, ExpectedPlayers: string[]){
-    const TrialsData = HuntId.includes("Arena") ? RandomlyGenTrialsData(HuntId.includes("Elite")) : undefined;
-    const MatchmakerHuntId = TrialsData == undefined ? GetMatchmakerHuntIdFromPlayerHuntId(HuntId) : TrialsData.TrialsHuntId;
-    let BehemothPath = TrialsData == undefined ? GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId!) : TrialsData.Behemoth;
-    let MapPath = TrialsData == undefined ? GetMapPathFromMatchmakerHuntId(MatchmakerHuntId!) : TRIALS_MAP_PATH;
+export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, ExpectedPlayers: string[], FreshInstance = false){
+    const Trial = ResolveTrial(HuntId);
+    const MatchmakerHuntId = Trial == undefined ? GetMatchmakerHuntIdFromPlayerHuntId(HuntId) : Trial.TrialsHuntId;
+    let BehemothPath = Trial == undefined ? GetBehemothPathFromMatchmakerHuntId(MatchmakerHuntId!) : Trial.Behemoth;
+    let MapPath = Trial == undefined ? GetMapPathFromMatchmakerHuntId(MatchmakerHuntId!) : TRIALS_MAP_PATH;
+    const ExpectedPlayerHuntId = GetExpectedHuntId(Trial, HuntId);
 
     if(MatchmakerHuntId != undefined && !MatchmakerHuntId.includes("Arena")){
         const OverrideGameMode = GetGameModeOverrideFromMatchmakerHuntId(MatchmakerHuntId);
@@ -862,17 +1068,76 @@ export async function StartupGameserverWithHuntIdAndPlayers(HuntId: string, Expe
         }
     }
 
-    const GameServerToReturn = await StartServer({
+    logger.info({
+        huntId: HuntId,
+        matchmakerHuntId: MatchmakerHuntId,
+        expectedPlayerHuntId: ExpectedPlayerHuntId,
+        behemoth: BehemothPath,
+        map: MapPath,
+        expectedPlayers: ExpectedPlayers,
+        freshInstance: FreshInstance
+    }, "Resolved hunt gameserver launch");
+
+    const StartOptions: StartServerOptions = {
         map: MapPath,
         behemoth: BehemothPath,
         matchmakerHuntId: MatchmakerHuntId,
-        expectedPlayers: TransformExpectedPlayers(HuntId, ExpectedPlayers),
+        expectedPlayers: TransformExpectedPlayers(ExpectedPlayerHuntId, ExpectedPlayers),
         isRamsgate: false,
         isTrainingDojo: false,
         origin: "HUNT_MATCHMAKER",
         trigger: HuntId,
         shutdownAfterSeconds: GetHuntIdleShutdownSeconds(HuntId, MatchmakerHuntId, MapPath)
-    });
+    };
+
+    const PreviousServers = FreshInstance ? FindHuntGameserversForPlayers(ExpectedPlayers) : [];
+    let RetiredBeforeStartup = false;
+
+    const RetireBeforeStartup = async () => {
+        if(RetiredBeforeStartup || PreviousServers.length === 0){
+            return;
+        }
+
+        RetiredBeforeStartup = true;
+        logger.info({
+            huntId: HuntId,
+            playerIds: ExpectedPlayers,
+            servers: PreviousServers.map((Server) => ({id: Server.id, port: Server.port, processId: Server.processId}))
+        }, "No free hunt port; retiring previous gameservers before fresh startup");
+        await Promise.all(PreviousServers.map((Server) => ShutdownServer(Server, "fresh_instance_port_required")));
+    };
+
+    if(FreshInstance && PreviousServers.length > 0 && FreePorts.length === 0){
+        await RetireBeforeStartup();
+    }
+
+    let GameServerToReturn: Gameserver;
+    try{
+        GameServerToReturn = await StartServer(StartOptions);
+    }
+    catch(Error){
+        if(FreshInstance && PreviousServers.length > 0 && !RetiredBeforeStartup && Error instanceof NoFreeHuntPortsError){
+            await RetireBeforeStartup();
+            GameServerToReturn = await StartServer(StartOptions);
+        }
+        else{
+            throw Error;
+        }
+    }
+
+    if(FreshInstance && !RetiredBeforeStartup){
+        RetireReplacedGameservers(PreviousServers, ExpectedPlayers, GameServerToReturn);
+    }
+
+    if(FreshInstance){
+        logger.info({
+            huntId: HuntId,
+            playerIds: ExpectedPlayers,
+            serverId: GameServerToReturn.id,
+            port: GameServerToReturn.port,
+            replacementMode: RetiredBeforeStartup ? "old_first_no_free_port" : "new_first"
+        }, "Fresh gameserver instance ready");
+    }
 
     return {
         id: GameServerToReturn.id,

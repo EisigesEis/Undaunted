@@ -1,17 +1,24 @@
 import { logger } from "../logger";
 import { GetOrStartTrainingDojoConnectionDetails, GetRamsgateConnectionDetails, StartupGameserverWithArgs, StartupGameserverWithHuntIdAndPlayers } from "./gameservers";
 
-export async function HandleMatchmakingRequest(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined){
-    logger.info(`Handling matchmaking with GameMode: ${GameMode} HuntId: ${HuntId} and GameArgs: ${GameArgs} and ExpectedPlayers ${ExpectedPlayers}`);
+export async function HandleMatchmakingRequest(GameMode: string, GameArgs: string, HuntId: string, ExpectedPlayers: string[] | undefined, FreshInstance = false){
+    const NormalizedHuntId = HuntId ?? "";
+    const NormalizedExpectedPlayers = ExpectedPlayers ?? [];
+
+    logger.info({
+        gameMode: GameMode,
+        huntId: NormalizedHuntId,
+        gameArgs: GameArgs,
+        expectedPlayers: NormalizedExpectedPlayers,
+        freshInstance: FreshInstance
+    }, "Handling matchmaking");
 
     if(GameMode === "CITY"){
         return GetRamsgateConnectionDetails();
     }
     else if(GameMode === "SHARED"){
-        if (HuntId != undefined && HuntId.trim().length > 0){
-            if(HuntId == "ShatteredIsles_TrainingDojo"){
-                return await GetOrStartTrainingDojoConnectionDetails("TRAINING_DOJO_LAZY");
-            }
+        if(NormalizedHuntId === "ShatteredIsles_TrainingDojo"){
+            return await GetOrStartTrainingDojoConnectionDetails("TRAINING_DOJO_LAZY");
         }
     }
     else if(GameMode === "ISLAND"){
@@ -19,8 +26,8 @@ export async function HandleMatchmakingRequest(GameMode: string, GameArgs: strin
             return await StartupGameserverWithArgs(GameArgs, ExpectedPlayers);
         }
 
-        if(HuntId != undefined && HuntId.trim().length > 0 && ExpectedPlayers != undefined){
-            return await StartupGameserverWithHuntIdAndPlayers(HuntId, ExpectedPlayers!);
+        if(NormalizedHuntId.length > 0 && ExpectedPlayers != undefined){
+            return await StartupGameserverWithHuntIdAndPlayers(NormalizedHuntId, ExpectedPlayers, FreshInstance);
         }
     }
 

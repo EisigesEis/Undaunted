@@ -22,6 +22,9 @@
     <Filter Include="Hooks">
       <UniqueIdentifier>{9a090ef4-0728-4a45-9c7c-7044347405c6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="TrialsBrowser">
+      <UniqueIdentifier>{0f7f0f2e-e5f3-4f9c-9310-544db1969328}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -35,6 +38,18 @@
     </ClInclude>
     <ClInclude Include="Hooks\NativeNameCleanup.h">
       <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserData.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserOverlay.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserPaint.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserQueue.h">
+      <Filter>TrialsBrowser</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -91,6 +106,18 @@
     </ClCompile>
     <ClCompile Include="SDK\BPGM_Archon_Prototype_functions.cpp">
       <Filter>SDK</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserOverlay.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserData.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserPaint.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserQueue.cpp">
+      <Filter>TrialsBrowser</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

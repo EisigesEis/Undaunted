@@ -2,6 +2,7 @@ import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
 import { BuildCandidateStatusResponse, CheckAndUpdateQueueStatus, HandlePlayerMatchmaking } from "../controllers/matchmaking";
+import { GetPartyById, GetPartyForPlayer } from "../controllers/party";
 
 export const matchmakingRouter = Router();
 
@@ -104,6 +105,19 @@ matchmakingRouter.post("/candidate/join", HasUndauntedMetagameAuth, async (req: 
         partyId: PartyId,
         privateMatch: PrivateMatch
     }, "Candidate join requested");
+
+    const RequestedParty = GetPartyById(PartyId);
+    const Party = RequestedParty?.members.has(UserId) === true ? RequestedParty : GetPartyForPlayer(UserId);
+    if(Party != undefined && Party.leaderPlayerId !== UserId){
+        logger.warn({
+            userId: UserId,
+            partyId: Party.partyId,
+            leaderPlayerId: Party.leaderPlayerId,
+            huntId: HuntId
+        }, "Rejected matchmaking from non-leader");
+        res.status(403).json({error: "not_party_leader"});
+        return;
+    }
 
     // TODO: We put a LOT of faith in our authenticated users not abusing the matchmaking system right now
     // A reasonable addition would be checks on frequency of MM/server spinup
