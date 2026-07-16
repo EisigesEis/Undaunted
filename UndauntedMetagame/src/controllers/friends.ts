@@ -73,6 +73,8 @@ function BuildEpicFriendEntry(accountId: string) {
     };
 }
 
+// TODO: extra fields here mess things up for us with loadouts
+// corrupting memory (just how?)
 export async function BuildFriendPayload(accountId: string): Promise<Record<string, any>> {
     const Identity = await BuildCanonicalAccountIdentity(accountId);
     const Presence = await BuildPresencePayload(accountId);
