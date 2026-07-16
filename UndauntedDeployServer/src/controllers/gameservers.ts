@@ -84,6 +84,7 @@ const GAMESERVER_READY_CALLBACK_URL = process.env.GAMESERVER_READY_CALLBACK_URL 
 const SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP = Number(process.env.SECONDS_TO_WAIT_BETWEEN_GAMESERVER_STARTUP!);
 const GAMESERVER_STARTUP_TIMEOUT_SECONDS = Number(process.env.GAMESERVER_STARTUP_TIMEOUT_SECONDS || "60");
 const RAMSGATE_RESTART_RETRY_SECONDS = Number(process.env.RAMSGATE_RESTART_RETRY_SECONDS || "5");
+const ADOPT_GAMESERVER = process.env.ADOPT_GAMESERVER !== "false";
 const PREWARM_TRAINING_DOJO = process.env.PREWARM_TRAINING_DOJO === "true";
 const TRAINING_DOJO_IDLE_SHUTDOWN_SECONDS = Number(process.env.TRAINING_DOJO_IDLE_SHUTDOWN_SECONDS || "300");
 const HUNT_IDLE_SHUTDOWN_SECONDS = Number(process.env.HUNT_IDLE_SHUTDOWN_SECONDS || "90");
@@ -511,7 +512,11 @@ async function StartServer(Options: StartServerOptions){
         const OwnerPid = GetUdpPortOwnerPid(Port);
 
         if(OwnerPid != undefined){
-            return CreateAdoptedFixedPortServer(Options, Port, OwnerPid);
+            if(ADOPT_GAMESERVER){
+                return CreateAdoptedFixedPortServer(Options, Port, OwnerPid);
+            }
+
+            throw new Error(`Fixed gameserver port ${Port} is already owned by pid ${OwnerPid}; refusing to adopt it with ADOPT_GAMESERVER=false`);
         }
 
         throw new Error(`Fixed gameserver port ${Port} is already in use before startup and its owner could not be identified`);
@@ -533,6 +538,17 @@ async function StartServer(Options: StartServerOptions){
         ReadyCallbackToken,
         ...STANDARD_GAMESERVER_ARGS
     ];
+
+    logger.info({
+        id: Id,
+        port: Port,
+        origin: Options.origin,
+        trigger: Options.trigger,
+        map: Options.map,
+        behemoth: Options.behemoth,
+        matchmakerHuntId: Options.matchmakerHuntId,
+        expectedPlayers: Options.expectedPlayers
+    }, "Starting gameserver process");
 
     const StartedProcess = await StartGameserverProcess(GameserverArgs);
 
