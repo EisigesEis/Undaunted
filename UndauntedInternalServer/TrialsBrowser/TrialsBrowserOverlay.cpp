@@ -23,6 +23,7 @@ namespace TrialsBrowserOverlay {
             kDifficultyCombo = 1001,
             kBehemothCombo = 1002,
             kPrivateCheckbox = 1003,
+            kAtmosphereCombo = 1008,
             kQueueButton = 1004,
             kRamsgateButton = 1005,
             kStatusLabel = 1006,
@@ -62,6 +63,18 @@ namespace TrialsBrowserOverlay {
             HoveredModifier = -1;
         }
 
+        void ApplyModifierTooltipStyle(const ModifierStyle* Style) {
+            if (ModifierTooltip == nullptr)
+                return;
+
+            const COLORREF Fill = Style != nullptr ? Style->Fill : kPanelHover;
+            const COLORREF Text = Style != nullptr ? Style->Text : kText;
+            SendMessageW(ModifierTooltip, TTM_SETTIPBKCOLOR, Fill, 0);
+            SendMessageW(ModifierTooltip, TTM_SETTIPTEXTCOLOR, Text, 0);
+            SendMessageW(ModifierTooltip, TTM_UPDATE, 0, 0);
+            RedrawWindow(ModifierTooltip, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
+        }
+
         void UpdateModifierTooltip(POINT Point) {
             int HitIndex = -1;
             for (size_t Index = 0; Index < ModifierHitRegions.size(); ++Index) {
@@ -83,6 +96,7 @@ namespace TrialsBrowserOverlay {
             Tool.hwnd = DetailsPanel;
             Tool.uId = 1;
             Tool.lpszText = const_cast<wchar_t*>(ModifierHitRegions[HitIndex].Description);
+            ApplyModifierTooltipStyle(&ModifierHitRegions[HitIndex].Style);
             SendMessageW(ModifierTooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&Tool));
 
             POINT ScreenPoint = Point;
@@ -130,6 +144,11 @@ namespace TrialsBrowserOverlay {
 
         int DifficultyIndex(HWND Parent) {
             const int Index = ComboIndex(Parent, kDifficultyCombo);
+            return Index == CB_ERR ? 0 : Index;
+        }
+
+        int AtmosphereIndex(HWND Parent) {
+            const int Index = ComboIndex(Parent, kAtmosphereCombo);
             return Index == CB_ERR ? 0 : Index;
         }
 
@@ -269,12 +288,23 @@ namespace TrialsBrowserOverlay {
                 return;
 
             HideModifierTooltip();
+            ApplyModifierTooltipStyle(nullptr);
             ModifierHitRegions.clear();
 
             if (const TrialRow* Row = SelectedTrialRow(Hwnd))
                 CurrentDetails = BuildTrialDetails(*Row);
             else
                 CurrentDetails = {};
+
+            if (HWND Atmosphere = GetDlgItem(Hwnd, kAtmosphereCombo); Atmosphere != nullptr) {
+                const int Selected = AtmosphereIndex(Hwnd);
+                std::wstring DefaultLabel = L"Default";
+                if (!CurrentDetails.Atmosphere.empty())
+                    DefaultLabel += L" (" + CurrentDetails.Atmosphere + L")";
+                SendMessageW(Atmosphere, CB_DELETESTRING, 0, 0);
+                SendMessageW(Atmosphere, CB_INSERTSTRING, 0, reinterpret_cast<LPARAM>(DefaultLabel.c_str()));
+                SendMessageW(Atmosphere, CB_SETCURSEL, Selected >= 0 ? Selected : 0, 0);
+            }
 
             InvalidateRect(DetailsPanel, nullptr, TRUE);
         }
@@ -285,8 +315,13 @@ namespace TrialsBrowserOverlay {
                 return L"";
 
             const wchar_t* Prefix = DifficultyIndex(Hwnd) == 1 ? L"Trials_PlayerHunt_Elite_" : L"Trials_PlayerHunt_Hard_";
+            static constexpr const wchar_t* AtmosphereSuffixes[] = { L"", L"_Day", L"_Night" };
+            const int Atmosphere = AtmosphereIndex(Hwnd);
+            const wchar_t* Suffix = Atmosphere >= 0 && Atmosphere < 3
+                ? AtmosphereSuffixes[Atmosphere]
+                : L"";
             wchar_t HuntId[80] = {};
-            swprintf_s(HuntId, L"%s%S", Prefix, Row->Suffix);
+            swprintf_s(HuntId, L"%s%S%s", Prefix, Row->Suffix, Suffix);
             return HuntId;
         }
 
@@ -316,8 +351,7 @@ namespace TrialsBrowserOverlay {
                 SetWindowTheme(ModifierTooltip, L"", L"");
                 SendMessageW(ModifierTooltip, WM_SETFONT, reinterpret_cast<WPARAM>(UiFont), FALSE);
                 SendMessageW(ModifierTooltip, TTM_SETMAXTIPWIDTH, 0, 320);
-                SendMessageW(ModifierTooltip, TTM_SETTIPBKCOLOR, kPanelHover, 0);
-                SendMessageW(ModifierTooltip, TTM_SETTIPTEXTCOLOR, kText, 0);
+                ApplyModifierTooltipStyle(nullptr);
                 RECT TooltipMargin = { 6, 4, 6, 4 };
                 SendMessageW(ModifierTooltip, TTM_SETMARGIN, 0, reinterpret_cast<LPARAM>(&TooltipMargin));
 
@@ -330,15 +364,22 @@ namespace TrialsBrowserOverlay {
                 Tool.lpszText = const_cast<wchar_t*>(L"");
                 SendMessageW(ModifierTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&Tool));
             }
-            CreateLabel(Hwnd, L"Difficulty", 16, 164, 96, 16);
-            HWND Difficulty = CreateCombo(Hwnd, kDifficultyCombo, 16, 180, 174, 160);
+            CreateLabel(Hwnd, L"Difficulty", 16, 164, 112, 16);
+            HWND Difficulty = CreateCombo(Hwnd, kDifficultyCombo, 16, 180, 120, 160);
             AddComboString(Difficulty, L"Normal");
             AddComboString(Difficulty, L"Dauntless");
             SendMessageW(Difficulty, CB_SETCURSEL, 1, 0);
+
+            CreateLabel(Hwnd, L"Atmosphere", 146, 164, 112, 16);
+            HWND Atmosphere = CreateCombo(Hwnd, kAtmosphereCombo, 146, 180, 120, 160);
+            AddComboString(Atmosphere, L"Default");
+            AddComboString(Atmosphere, L"Day");
+            AddComboString(Atmosphere, L"Night");
+            SendMessageW(Atmosphere, CB_SETCURSEL, 0, 0);
             UpdateTrialDetails(Hwnd);
 
-            HWND Private = CreateCheckboxControl(Hwnd, 294, 184, kPrivateCheckbox);
-            CreateLabel(Hwnd, L"Private", 320, 184, 56, 22);
+            HWND Private = CreateCheckboxControl(Hwnd, 276, 184, kPrivateCheckbox);
+            CreateLabel(Hwnd, L"Private", 302, 184, 72, 22);
             InvalidateRect(Private, nullptr, TRUE);
 
             CreateButtonControl(Hwnd, L"Queue Trial", 16, 215, 174, 38, kQueueButton);
@@ -390,7 +431,7 @@ namespace TrialsBrowserOverlay {
 
             case WM_MEASUREITEM: {
                 auto* Measure = reinterpret_cast<MEASUREITEMSTRUCT*>(LParam);
-                if (Measure != nullptr && (Measure->CtlID == kDifficultyCombo || Measure->CtlID == kBehemothCombo)) {
+                if (Measure != nullptr && (Measure->CtlID == kDifficultyCombo || Measure->CtlID == kBehemothCombo || Measure->CtlID == kAtmosphereCombo)) {
                     Measure->itemHeight = 22;
                     return TRUE;
                 }
@@ -414,7 +455,7 @@ namespace TrialsBrowserOverlay {
                     DrawTrialDetails(DrawItem, CurrentDetails, UiFont, &ModifierHitRegions);
                     return TRUE;
                 }
-                if (DrawItem->CtlID == kDifficultyCombo || DrawItem->CtlID == kBehemothCombo) {
+                if (DrawItem->CtlID == kDifficultyCombo || DrawItem->CtlID == kBehemothCombo || DrawItem->CtlID == kAtmosphereCombo) {
                     DrawComboItem(DrawItem, UiFont, DrawItem->CtlID == kBehemothCombo, DifficultyIndex(Hwnd));
                     return TRUE;
                 }

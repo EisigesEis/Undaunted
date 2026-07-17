@@ -195,7 +195,7 @@ namespace TrialsBrowserOverlay {
             const RECT ChipRect = { X, Y, X + Width, Y + ChipHeight };
             DrawChip(Item->hDC, ChipRect, Chip);
             if (HitRegions != nullptr && Chip.Description != nullptr && Chip.Description[0] != L'\0')
-                HitRegions->push_back({ ChipRect, Chip.Description });
+                HitRegions->push_back({ ChipRect, Chip.Description, Chip.Style });
             X += Width + ChipGap;
         }
 

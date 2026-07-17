@@ -19,6 +19,7 @@ namespace TrialsBrowserOverlay {
     struct ModifierChipHitRegion {
         RECT Rect = {};
         const wchar_t* Description = L"";
+        ModifierStyle Style = {};
     };
 
     void ApplyDarkTheme(HWND Control);
