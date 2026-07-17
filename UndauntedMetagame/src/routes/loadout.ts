@@ -2,65 +2,63 @@ import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { BuildLoadoutResponsePayload, BuildLoadoutSlotCountPayload, EnsureUnlockedLoadoutSlotsForUserIdAndCharacterId, GetLoadoutSetForUserIdAndCharacterId, MAX_UNLOCKED_LOADOUT_SLOTS, SetActiveLoadoutIndexForUserIdAndCharacterId, SetLoadoutDataForUserIdAndCharacterId } from "../controllers/loadout";
 import type { LoadoutMutationResult } from "../controllers/loadout";
+import { logger } from "../logger";
 
 export const loadoutRouter = Router();
 
+function SendLoadoutJson(res: any, Payload: Record<string, any>){
+    const Body = JSON.stringify(Payload);
+    logger.info({route: res.req?.path, status: 200, bytes: Buffer.byteLength(Body), keys: Object.keys(Payload)}, "Loadout response shape");
+    res.status(200).json(Payload);
+}
+
 function SendLoadoutSetResponse(res: any, LoadoutSet: {loadouts: any[], persistent: any, activeIndex: number}){
-    res.status(200);
-    res.json({
+    SendLoadoutJson(res, {
         code: null,
         message: "OK",
         payload: BuildLoadoutResponsePayload(LoadoutSet)
     });
 }
 
-function SendLoadoutMutationResponse(res: any, LoadoutSet: {loadouts: any[], persistent: any, activeIndex: number}){
-    const Payload = BuildLoadoutResponsePayload(LoadoutSet);
-
-    res.status(200);
-    res.json({
+function SendLoadoutMutationResponse(res: any){
+    // RE: SetPersistentLoadout, SetLoadoutForSlot, and SetActiveLoadoutSlot
+    // parse generic response null + OK.
+    SendLoadoutJson(res, {
         code: null,
-        message: "OK",
-        success: true,
-        payload: Payload
+        message: "OK"
     });
 }
 
 function SendSlotCountResponse(res: any, LoadoutSet: {loadouts: any[], activeIndex: number}){
     const Payload = BuildLoadoutSlotCountPayload(LoadoutSet);
 
-    res.status(200);
-    res.json(Payload);
+    SendLoadoutJson(res, {code: null, message: "OK", payload: Payload});
 }
 
-function SendMaxAccountSlotCountResponse(res: any){
-    const Payload = {
-        GrantedLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        NumLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        NumAccountLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumAccountLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        slot_count: MAX_UNLOCKED_LOADOUT_SLOTS,
-        slotCount: MAX_UNLOCKED_LOADOUT_SLOTS,
-        num_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        num_account_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        max_account_slots: MAX_UNLOCKED_LOADOUT_SLOTS
-    };
-
-    res.status(200);
-    res.json(Payload);
+function SendAccountSlotCountResponse(res: any){
+    SendLoadoutJson(res, {
+        code: null,
+        message: "OK",
+        payload: {
+            num_account_slots: 0,
+            max_account_slots: 0,
+            num_character_slots: 0,
+            max_character_slots: MAX_UNLOCKED_LOADOUT_SLOTS
+        }
+    });
 }
 
 function SendActiveLoadoutResponse(res: any, LoadoutSet: {loadouts: any[], persistent: any, activeIndex: number}){
     const ActiveLoadout = LoadoutSet.loadouts[LoadoutSet.activeIndex] ?? LoadoutSet.loadouts[0];
 
-    res.status(200);
-    res.json({
+    SendLoadoutJson(res, {
         code: null,
         message: "OK",
         success: true,
-        ...ActiveLoadout,
-        payload: ActiveLoadout
+        ...ActiveLoadout
+        // TODO: One of the only requests of this shape with ... unpack instead of payload:
+        // might need RE.
+        // payload: ActiveLoadout
     });
 }
 
@@ -84,11 +82,13 @@ function parseRouteInteger(Value: string){
 }
 
 loadoutRouter.get("/loadout/:userId/slotcount", HasUndauntedMetagameAuth, async (req: any, res) => {
-    SendMaxAccountSlotCountResponse(res);
+    logger.info({method: req.method, path: req.path, userId: req.params.userId}, "Account loadout slot count");
+    SendAccountSlotCountResponse(res);
 });
 
 loadoutRouter.post("/loadout/:userId/unlock/:slots", HasUndauntedMetagameAuth, async (req: any, res) => {
     const RequestedSlots = parseRouteInteger(req.params.slots);
+    logger.info({method: req.method, path: req.path, userId: req.params.userId, slots: req.params.slots}, "Account loadout unlock");
 
     if(RequestedSlots == undefined || RequestedSlots < 1 || RequestedSlots > MAX_UNLOCKED_LOADOUT_SLOTS){
         res.status(400);
@@ -96,7 +96,7 @@ loadoutRouter.post("/loadout/:userId/unlock/:slots", HasUndauntedMetagameAuth, a
         return;
     }
 
-    SendMaxAccountSlotCountResponse(res);
+    SendAccountSlotCountResponse(res);
 });
 
 loadoutRouter.get("/loadout/:userId/:characterId/slotcount", HasUndauntedMetagameAuth, async (req: any, res) => {
@@ -158,7 +158,7 @@ loadoutRouter.post("/loadout/:userId/:characterId/active/:index", HasUndauntedMe
         return;
     }
 
-    SendLoadoutMutationResponse(res, Result.loadoutState);
+    SendLoadoutMutationResponse(res);
 });
 
 loadoutRouter.post("/loadout/:userId/:characterId/:index", HasUndauntedMetagameAuth, async (req: any, res) => {
@@ -170,7 +170,7 @@ loadoutRouter.post("/loadout/:userId/:characterId/:index", HasUndauntedMetagameA
     const Result = await SetLoadoutDataForUserIdAndCharacterId(RequestorAccountId, CharacterId, Index, Data);
 
     if(Result.success && Result.loadoutState != undefined){
-        SendLoadoutMutationResponse(res, Result.loadoutState);
+        SendLoadoutMutationResponse(res);
     }
     else{
         sendEmptyError(res, Result);

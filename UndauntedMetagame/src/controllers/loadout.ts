@@ -73,11 +73,12 @@ const DEFAULT_BANNER_CUSTOMIZATION = JSON.stringify({
     SigilSheenType: 0
 });
 
-const DEFAULT_QUICK_CURIOSITIES_ITEMS = Array.from({length: 8}, (_, item_index) => ({
-    item_index,
-    item_id: DEFAULT_EMPTY_ID,
-    instance_id: DEFAULT_EMPTY_ID,
-}));
+// RE: 1.4.4 omit empty quick-curiosity placeholders to prevent invalid item lookup.
+const DEFAULT_QUICK_CURIOSITIES_ITEMS: Array<{
+    item_index: number,
+    item_id: string,
+    instance_id: string,
+}> = [];
 
 const DEFAULT_EQUIPMENT = {
     weapon: {
@@ -188,7 +189,7 @@ function parseLoadoutRow(LoadoutDbRow: LoadoutRow): LoadoutState{
 
     return {
         loadouts: ParsedLoadouts,
-        persistent: parseJsonField(LoadoutDbRow.persistent, DEFAULT_PERSISTENT),
+        persistent: normalizePersistentLoadout(parseJsonField(LoadoutDbRow.persistent, DEFAULT_PERSISTENT)),
         activeIndex: clampActiveIndex(LoadoutDbRow.activeIndex, ParsedLoadouts.length)
     };
 }
@@ -227,22 +228,47 @@ function parseLoadoutIndex(Index: string){
     return ParsedIndex;
 }
 
+function isLoadoutJsonObject(Value: unknown): Value is Record<string, unknown> {
+    return Value != undefined && typeof Value === "object" && !Array.isArray(Value);
+}
+
+function normalizePersistentLoadout(PersistentData: unknown): Record<string, unknown> {
+    if(!isLoadoutJsonObject(PersistentData)){
+        return DEFAULT_PERSISTENT;
+    }
+
+    const QuickCuriosities = PersistentData.quick_curiosities_items;
+    if(!Array.isArray(QuickCuriosities)){
+        return PersistentData;
+    }
+
+    const SanitizedQuickCuriosities = QuickCuriosities.filter((Entry) => {
+        if(!isLoadoutJsonObject(Entry)){
+            return true;
+        }
+
+        return !(Entry.item_id === DEFAULT_EMPTY_ID && Entry.instance_id === DEFAULT_EMPTY_ID);
+    });
+
+    if(SanitizedQuickCuriosities.length === QuickCuriosities.length){
+        return PersistentData;
+    }
+
+    return {
+        ...PersistentData,
+        quick_curiosities_items: SanitizedQuickCuriosities
+    };
+}
+
 export function BuildLoadoutResponsePayload(LoadoutState: LoadoutState){
     const SlotCount = LoadoutState.loadouts.length;
 
+    // RE: 1.4.4 GetActiveLoadout/GetAllLoadouts response
     return {
         loadouts: LoadoutState.loadouts,
         persistent: LoadoutState.persistent,
-        LoadoutSlotDataArray: LoadoutState.loadouts,
-        ActiveLoadoutSlotIndex: LoadoutState.activeIndex,
-        NumLoadoutSlots: SlotCount,
-        NumAccountLoadoutSlots: SlotCount,
-        NumCharacterLoadoutSlots: SlotCount,
-        MaxNumLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumAccountLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumCharacterLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        num_account_slots: SlotCount,
-        max_account_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
+        num_account_slots: 0,
+        max_account_slots: 0,
         num_character_slots: SlotCount,
         max_character_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
         active_index: LoadoutState.activeIndex,
@@ -250,26 +276,18 @@ export function BuildLoadoutResponsePayload(LoadoutState: LoadoutState){
     };
 }
 
-export function BuildLoadoutSlotCountPayload(LoadoutState: {loadouts: any[], activeIndex: number}){
+export function BuildLoadoutSlotCountPayload(LoadoutState: {loadouts: any[]}){
     const SlotCount = LoadoutState.loadouts.length;
 
+    // RE: FUN_140b165f0 is the 1.4.4 HTTP serializer/parser for this payload.
     return {
-        GrantedLoadoutSlots: SlotCount,
-        NumLoadoutSlots: SlotCount,
-        NumAccountLoadoutSlots: SlotCount,
-        NumCharacterLoadoutSlots: SlotCount,
-        MaxNumLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumAccountLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        MaxNumCharacterLoadoutSlots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        ActiveLoadoutSlotIndex: LoadoutState.activeIndex,
-        slot_count: SlotCount,
-        slotCount: SlotCount,
-        num_slots: SlotCount,
-        num_account_slots: SlotCount,
-        max_account_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
+        // TODO: Guess is acc slots is purchased and character is progression.
+        // If so, acc slots and char slots need save separately and not infer from loadouts count.
+        // Currently fine since we don't allow account slots buy.
+        num_account_slots: 0,
+        max_account_slots: 0,
         num_character_slots: SlotCount,
-        max_character_slots: MAX_UNLOCKED_LOADOUT_SLOTS,
-        active_index: LoadoutState.activeIndex
+        max_character_slots: MAX_UNLOCKED_LOADOUT_SLOTS
     };
 }
 
@@ -313,13 +331,20 @@ export async function SetLoadoutDataForUserIdAndCharacterId(UserId: string, Char
         return {success: false, statusCode: 400};
     }
 
+    // TODO: `data` is stored as-is. Maybe loadout parser for validation?
+    if(!isLoadoutJsonObject(ParsedData)){
+        logger.error(`Invalid loadout data shape for index ${Index}`);
+        return {success: false, statusCode: 400};
+    }
+
     try{
         return GetDb().transaction((Transaction) => {
             const LoadoutDbRow = getOrCreateLoadoutRow(Transaction, UserId, CharacterId).row;
             const ExistingLoadoutState = parseLoadoutRow(LoadoutDbRow);
 
             if(Index === "persistent"){
-                const PersistentData = JSON.stringify(ParsedData);
+                const NormalizedPersistentData = normalizePersistentLoadout(ParsedData);
+                const PersistentData = JSON.stringify(NormalizedPersistentData);
 
                 if(LoadoutDbRow.persistent === PersistentData){
                     return {
@@ -336,7 +361,7 @@ export async function SetLoadoutDataForUserIdAndCharacterId(UserId: string, Char
                     success: true,
                     loadoutState: {
                         ...ExistingLoadoutState,
-                        persistent: ParsedData
+                        persistent: NormalizedPersistentData
                     }
                 };
             }
@@ -353,13 +378,8 @@ export async function SetLoadoutDataForUserIdAndCharacterId(UserId: string, Char
                 return {success: false, statusCode: 400};
             }
 
-            if(typeof ParsedData !== "object" || Array.isArray(ParsedData)){
-                logger.error(`Invalid loadout slot payload shape for index ${Index}`);
-                return {success: false, statusCode: 400};
-            }
-
-            const UpdatedSlot = {
-                ...ParsedData,
+            const UpdatedSlot: Record<string, any> = {
+                ...(ParsedData as Record<string, any>),
                 slot_index: LoadoutIndex
             };
             const ExistingSlot = ExistingLoadoutState.loadouts[LoadoutIndex];
