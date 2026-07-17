@@ -720,6 +720,15 @@ function FindGameserverForPlayer(PlayerId: string){
     return undefined;
 }
 
+// mm timing logging, no gameplay effect
+export function GetRamsgatePrewarmStatus(){
+    return {
+        ready: RamsgateServer != undefined,
+        restarting: RamsgateRestart != undefined,
+        port: RamsgateServer?.port
+    };
+}
+
 function FindHuntGameserversForPlayers(PlayerIds: string[]){
     const Players = new Set(PlayerIds);
     return Gameservers.filter((Candidate) =>

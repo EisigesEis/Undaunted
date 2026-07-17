@@ -6,6 +6,7 @@
 #include <iostream>
 #include <ranges>
 #include <cwchar>
+#include <cwctype>
 #include <map>
 #include <winhttp.h>
 
@@ -54,7 +55,44 @@ namespace ClientHookConfig {
     constexpr bool kEnableNativeNameCleanup = true;
 }
 
+namespace ServerHookConfig {
+    // TODO: Log stripped assets and repak accordingly
+    constexpr bool kEnableAssetStripping = false;
+}
+
 std::map<std::wstring, std::wstring> EndpointMap = {};
+
+// TODO: ConfigCacheIni::GetString called for every INI setting during startup.
+bool WideContains(const wchar_t* Value, const wchar_t* Needle) {
+    return Value != nullptr && Needle != nullptr && wcsstr(Value, Needle) != nullptr;
+}
+
+bool WideContainsInsensitive(const wchar_t* Value, const wchar_t* Needle) {
+    if (Value == nullptr || Needle == nullptr)
+        return false;
+
+    const size_t NeedleLength = wcslen(Needle);
+    if (NeedleLength == 0)
+        return true;
+
+    for (const wchar_t* Candidate = Value; *Candidate != L'\0'; ++Candidate) {
+        size_t Index = 0;
+        while (Index < NeedleLength && Candidate[Index] != L'\0' &&
+               towlower(Candidate[Index]) == towlower(Needle[Index])) {
+            ++Index;
+        }
+
+        if (Index == NeedleLength)
+            return true;
+    }
+
+    return false;
+}
+
+bool MayBeMappedEndpointKey(const wchar_t* Key) {
+    return WideContains(Key, L"Endpoint") ||
+        (Key != nullptr && wcscmp(Key, L"StoreReconcileUrl") == 0);
+}
 
 std::wstring FindClientMetagameAddress(wchar_t** Args, int NumArgs) {
     for (int Index = 1; Index < NumArgs; ++Index) {
@@ -81,6 +119,8 @@ void EvalEndpointMap() {
         {L"AuthTagsEndpoint", L"http://" + Globals::MetagameAddress + L"/tags"},
         {L"AccountInfoEndpoint", L"http://" + Globals::MetagameAddress + L"/accountinfo"},
         {L"DauntlessSessionTokenEndpoint", L"http://" + Globals::MetagameAddress + L"/gamesession/{linkedaccountservice}"},
+        // TODO: CreatePhoenixAccountEndpoint likely responsible for /account127.0.0.1
+        // but why?
         {L"CreatePhoenixAccountEndpoint", L"http://" + Globals::MetagameAddress + L"/account"},
         {L"LinkAccountEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link"},
         {L"IsAccountLinkedEndpoint", L"http://" + Globals::MetagameAddress + L"/account/link/{service}/{accountid}"},
@@ -498,6 +538,36 @@ static bool ShouldTickStaminaForServer() {
     return ShouldTick;
 }
 
+static void StripUnreferencedClientAssets() {
+    size_t Candidates = 0;
+    constexpr uint32_t KeepFlags = static_cast<uint32_t>(EObjectFlags::Standalone) |
+        static_cast<uint32_t>(EObjectFlags::MarkAsRootSet);
+
+    for (int Index = 0; Index < UObject::GObjects->Num(); ++Index) {
+        UObject* Object = UObject::GObjects->GetByIndex(Index);
+        if (!Object || Object->IsDefaultObject() ||
+            (Object->Flags & EObjectFlags::BeginDestroyed) ||
+            (Object->Flags & EObjectFlags::FinishDestroyed)) {
+            continue;
+        }
+
+        const bool IsClientAsset = Object->IsA(UTexture::StaticClass()) ||
+            Object->IsA(UMaterialInterface::StaticClass()) ||
+            Object->IsA(USoundBase::StaticClass());
+        if (!IsClientAsset) {
+            continue;
+        }
+
+        Object->Flags = static_cast<EObjectFlags>(static_cast<uint32_t>(Object->Flags) & ~KeepFlags);
+        ++Candidates;
+    }
+
+    UKismetSystemLibrary::CollectGarbage();
+    if (Globals::EnableLogging) {
+        std::cout << "Released unreferenced client assets from " << Candidates << " candidates" << std::endl;
+    }
+}
+
 void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender) {
     reinterpret_cast<void(*)(UGameEngine*, float, char)>(OrigGameEngineTick)(GameEngine, DeltaTime, CanRender);
 
@@ -508,6 +578,14 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
 
     if (Globals::Listening) {
         Networking::TickNetworking();
+    }
+
+    if constexpr (ServerHookConfig::kEnableAssetStripping) {
+        static bool AssetsStripped = false;
+        if (Globals::Listening && !AssetsStripped) {
+            AssetsStripped = true;
+            StripUnreferencedClientAssets();
+        }
     }
 
     if (Globals::DoListen && ShouldAttemptListen(DeltaTime)) {
@@ -582,10 +660,6 @@ enum EFunctionCallspace : uint32_t
 void* OrigGetActorCallspace = nullptr;
 
 EFunctionCallspace GetActorCallspace(AActor* Actor, UFunction* Function, void* Stack) {
-    if (Function->GetFullName().contains("Ammo")) {
-        std::cout << Actor->GetFullName() << " - " << Function->GetFullName() << std::endl;
-    }
-
     return reinterpret_cast<EFunctionCallspace(*)(AActor*, UFunction*, void*)>(OrigGetActorCallspace)(Actor, Function, Stack);
 }
 
@@ -602,7 +676,7 @@ bool HasFinishedLoadingHook(UObject* a1) {
 
     if (!Ret) {
         if (Globals::EnableLogging)
-        std::cout << "[FORCEREADY] " << a1->GetFullName() << std::endl;
+            std::cout << "[FORCEREADY] " << a1->GetFullName() << std::endl;
         return true;
     }
 
@@ -697,66 +771,38 @@ bool DidDoTravelReset = false;
 
 void* OrigProcessEvent = nullptr;
 
-// TODO: Somewhere the game calls unlock loadout slots with bogus url like 16242342...
-// Find out why that is maybe? For now suppressing.
-static bool ShouldSuppressInvalidLoadoutSlotUnlock(UFunction* Function, void* Parms) {
-    static UFunction* UnlockLoadoutSlotsFunction = nullptr;
-    static UFunction* UnlockLoadoutSlotsCheatFunction = nullptr;
-    constexpr int32_t MaxLoadoutSlots = 6;
-
-    if (Function == nullptr || Parms == nullptr) {
-        return false;
-    }
-
-    const std::string FunctionName = Function->GetName();
-
-    if (Function == UnlockLoadoutSlotsFunction || (!UnlockLoadoutSlotsFunction && FunctionName == "UnlockLoadoutSlots")) {
-        UnlockLoadoutSlotsFunction = Function;
-
-        const auto* UnlockParams = (Params::ArchonLoadout_UnlockLoadoutSlots*)Parms;
-        if (UnlockParams->InNumSlots < 1 || UnlockParams->InNumSlots > MaxLoadoutSlots) {
-            std::cout << "[Loadout] Suppressed invalid UnlockLoadoutSlots count " << UnlockParams->InNumSlots << std::endl;
-            return true;
-        }
-    }
-    else if (Function == UnlockLoadoutSlotsCheatFunction || (!UnlockLoadoutSlotsCheatFunction && FunctionName == "UnlockLoadoutSlotsCheat")) {
-        UnlockLoadoutSlotsCheatFunction = Function;
-
-        const auto* UnlockParams = (Params::ArchonLoadout_UnlockLoadoutSlotsCheat*)Parms;
-        if (UnlockParams->InNumSlots < 1 || UnlockParams->InNumSlots > MaxLoadoutSlots) {
-            std::cout << "[Loadout] Suppressed invalid UnlockLoadoutSlotsCheat count " << UnlockParams->InNumSlots << std::endl;
-            return true;
-        }
-    }
-
-    return false;
-}
-
 void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
     static UFunction* ServerTryActivateAbilityWithEventData = nullptr;
     static UFunction* ServerTryActivateAbility = nullptr;
-
-    if (ShouldSuppressInvalidLoadoutSlotUnlock(Function, Parms)) {
-        return;
-    }
 
     if (Function == ServerTryActivateAbilityWithEventData || (!ServerTryActivateAbilityWithEventData && Function->GetName() == "ServerTryActivateAbilityWithEventData")) {
         ServerTryActivateAbilityWithEventData = Function;
 
         Params::AbilitySystemComponent_ServerTryActivateAbilityWithEventData* ActivateAbilityParams = (Params::AbilitySystemComponent_ServerTryActivateAbilityWithEventData*)Parms;
 
-        ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, &ActivateAbilityParams->TriggerEventData);
+        if (ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, &ActivateAbilityParams->TriggerEventData))
+            return;
     }
     else if (Function == ServerTryActivateAbility || (!ServerTryActivateAbility && Function->GetName() == "ServerTryActivateAbility")) {
         ServerTryActivateAbility = Function;
 
         Params::AbilitySystemComponent_ServerTryActivateAbility* ActivateAbilityParams = (Params::AbilitySystemComponent_ServerTryActivateAbility*)Parms;
 
-        ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, nullptr);
+        if (ServerTryActivateAbilityInternal((UAbilitySystemComponent*)Object, ActivateAbilityParams->AbilityToActivate, ActivateAbilityParams->InputPressed, ActivateAbilityParams->PredictionKey, nullptr))
+            return;
     }
 
     reinterpret_cast<void(*)(UObject*, UFunction*, void*)>(OrigProcessEvent)(Object, Function, Parms);
 
+}
+// TODO: Temporary workaround for CreatePhoenixAccountEndpoint and GET 127.0.0.1//
+bool IsMalformedLocalEndpoint(const std::wstring& Value) {
+    const size_t SchemeEnd = Value.find(L"://");
+    const size_t PathStart = SchemeEnd == std::wstring::npos ? 0 : Value.find(L'/', SchemeEnd + 3);
+    if (PathStart != std::wstring::npos && Value.compare(PathStart, 2, L"//") == 0)
+        return true;
+    return Value.find(L"/account127.0.0.1") != std::wstring::npos ||
+        Value.find(L"/accountlocalhost") != std::wstring::npos;
 }
 
 void* OrigConfigCacheIniGetString = nullptr;
@@ -765,37 +811,52 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
     if (Globals::MetagameAddress.empty())
         return reinterpret_cast<bool(*)(void* a1, const wchar_t* Section, const wchar_t* Key, FString * Value, FString * Filename)>(OrigConfigCacheIniGetString)(a1, Section, Key, Value, Filename);
 
-    EvalEndpointMap();
+    if (MayBeMappedEndpointKey(Key)) {
+        EvalEndpointMap();
+        const std::wstring KeyName(Key);
+        const auto Endpoint = EndpointMap.find(KeyName);
 
-    if (EndpointMap.contains(Key)) {
-        *Value = FString(EndpointMap.at(Key).c_str());
+        if (Endpoint != EndpointMap.end()) {
+            const std::wstring& MappedValue = Endpoint->second;
 
-        return true;
+            if (Globals::EnableLogging) {
+                FString RawValue;
+                const bool HadRawValue = reinterpret_cast<bool(*)(void*, const wchar_t*, const wchar_t*, FString*, FString*)>(OrigConfigCacheIniGetString)(a1, Section, Key, &RawValue, Filename);
+                const std::string RawUtf8 = HadRawValue ? RawValue.ToString() : std::string();
+                const std::wstring RawValueWide(RawUtf8.begin(), RawUtf8.end());
+                if (IsMalformedLocalEndpoint(RawValueWide) || IsMalformedLocalEndpoint(MappedValue)) {
+                    std::wcout << L"Malformed endpoint config section=" << (Section ? Section : L"<null>")
+                        << L" key=" << (Key ? Key : L"<null>") << L" raw=" << RawValueWide
+                        << L" mapped=" << MappedValue << std::endl;
+                }
+            }
+
+            *Value = FString(MappedValue.c_str());
+
+            return true;
+        }
     }
 
-    const std::wstring SectionName = Section != nullptr ? std::wstring(Section) : L"";
-    const std::wstring KeyName = Key != nullptr ? std::wstring(Key) : L"";
+    if (WideContainsInsensitive(Section, L"Mcp") && Key != nullptr) {
+        const bool IsStompSection = WideContainsInsensitive(Section, L"StompServiceMcp");
+        const bool IsXmppSection = WideContainsInsensitive(Section, L"Xmpp");
 
-    if (SectionName.contains(L"Mcp")) {
-        const bool IsStompSection = SectionName.contains(L"StompServiceMcp");
-        const bool IsXmppSection = SectionName.contains(L"XMPP");
-
-        if (KeyName.contains(L"protocol") || KeyName.contains(L"Protocol")) {
-            *Value = FString(IsStompSection ? L"ws" : L"http");
+        if (WideContains(Key, L"protocol") || WideContains(Key, L"Protocol")) {
+            *Value = FString((IsStompSection || IsXmppSection) ? L"ws" : L"http");
 
             return true;
         }
         
-        if (KeyName.contains(L"Domain")) {
+        if (WideContainsInsensitive(Key, L"Domain")) {
             if (IsXmppSection) {
-                *Value = FString(L"prod.ol.epicgames.com");
-
+                constexpr const wchar_t* XmppIdentityDomain = L"prod.ol.epicgames.com";
+                *Value = FString(XmppIdentityDomain);
                 return true;
             }
-
-            *Value = FString(Globals::MetagameAddress.c_str());
-
-            return true;
+            if (IsStompSection) {
+                *Value = FString(Globals::MetagameAddress.c_str());
+                return true;
+            }
         }
     }
     
@@ -815,10 +876,6 @@ bool GetEscalationSeason(UHuntCatalog* a1, FString* HuntID, FHunt_UnlockInfo* Un
 void* OrigGetTrackProgress = nullptr;
 
 __int64 GetTrackProgress(void* a1, FName* a2, void* a3) {
-    if (a2) {
-        std::cout << a2->ToString() << std::endl;
-    }
-
     return 9999999;
 }
 
