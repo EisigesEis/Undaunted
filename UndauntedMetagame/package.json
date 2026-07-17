@@ -6,7 +6,7 @@
   "author": "gwog :3",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/server.ts",
-    "build": "esbuild ./src/server.ts --bundle --platform=node --target=es2022 --format=cjs --packages=external --minify --legal-comments=none --outfile=dist/server.js",
+    "build": "node build.cjs",
     "test:xmpp": "tsx src/xmpp/selftest.ts",
     "test:stomp": "tsx src/stomp/selftest.ts",
     "test:friends": "tsx src/selftests/friends.ts",

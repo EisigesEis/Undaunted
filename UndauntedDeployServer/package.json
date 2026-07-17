@@ -6,7 +6,7 @@
   "author": "gwog :3",
   "scripts": {
     "dev": "tsx --env-file=.env src/server.ts",
-    "build": "esbuild ./src/server.ts --bundle --platform=node --target=es2022 --format=cjs --packages=external --minify --legal-comments=none --outfile=dist/server.js",
+    "build": "node build.cjs",
     "start": "node --env-file=.env dist/server.js"
   },
   "dependencies": {
