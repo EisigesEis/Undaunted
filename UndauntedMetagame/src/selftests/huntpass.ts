@@ -65,7 +65,6 @@ export async function runSelftest(){
     finally{
         await new Promise<void>((Resolve) => Server.close(() => Resolve()));
     }
-    console.log("Hunt Pass selftest passed");
 }
 
 if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

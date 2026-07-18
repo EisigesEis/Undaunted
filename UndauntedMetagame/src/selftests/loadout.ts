@@ -165,7 +165,6 @@ export async function runSelftest(){
 
         await expectStatus(`${BaseUrl}/loadout/loadout-test-user/loadout-test-character/active/6`, Token, {}, 400);
 
-        console.log("Loadout selftest passed");
     }
     finally{
         await new Promise<void>((resolve, reject) => Server.close((error) => error ? reject(error) : resolve()));

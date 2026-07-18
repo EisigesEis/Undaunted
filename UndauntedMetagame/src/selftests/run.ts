@@ -17,6 +17,7 @@ const suites: Suite[] = [
     {name: "stomp", tables: {users: "write"}, run: () => Run("../stomp/selftest")},
     {name: "party", tables: {users: "write"}, run: () => Run("./party")},
 ];
+const failedSuites: string[] = [];
 
 function accessFor(suite: Suite, table: string) {
     return suite.tables[table] ?? suite.tables["*"];
@@ -45,12 +46,22 @@ function batches() {
 async function main() {
     for (const batch of batches()) {
         await Promise.all(batch.map(async (suite) => {
-            await suite.run();
-            console.log(`${suite.name} selftest passed`);
+            try {
+                await suite.run();
+                console.log(`${suite.name} selftest passed`);
+            } catch (error) {
+                failedSuites.push(suite.name);
+                console.error(`${suite.name} selftest failed`);
+                throw error;
+            }
         }));
         if (batch.some((suite) => Object.values(suite.tables).includes("write"))) await ClearTestDatabase();
         ResetTestEnvironment();
     }
+    console.log(`PASSED: all ${suites.length} tests passed`);
 }
 
-void main().catch((error) => { console.error(error); process.exitCode = 1; });
+void main().catch(() => {
+    console.error(`FAILED: ${failedSuites.join(", ")} failed`);
+    process.exitCode = 1;
+});

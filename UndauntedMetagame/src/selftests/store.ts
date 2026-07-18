@@ -116,7 +116,6 @@ export async function runSelftest(){
     assert(PoorToken);
     assert.deepStrictEqual(await PurchaseFromToken("poor-user", PoorToken, "markssteel"), {success: false, error: "insufficient_funds"});
     assert.strictEqual((await GetBalancesForUser("poor-user")).CURRENCY_MARKS_STEEL, 149);
-    console.log("Store selftest passed");
 }
 
 if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });
