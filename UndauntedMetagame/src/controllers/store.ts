@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { GetDb } from "../db";
 import { characters, cooldowns, entitlements, inventory, users } from "../db/schema";
 import { HUNTPASS_PREMIUM_ENTITLEMENT } from "./huntpass";
-import { ReconcileTrialsCosmeticOwnership } from "./inventory";
+import { DecodeInventory } from "./inventory";
 
 export type StoreCurrencyId = "CURRENCY_NOTES" | "CURRENCY_MARKS_STEEL" | "CURRENCY_MARKS_GILDED";
 export type PurchaseCurrency = "markssteel" | "marksgilded" | "platinum";
@@ -235,13 +235,6 @@ const DailyCoreSku: StoreSku = {
 const DailyCooldownId = `store:${DailyCoreSku.id}`;
 const IssuedPurchaseTokens = new Map<string, {sub: string, sku: string, currency: PurchaseCurrency, exp: number, nonce: string}>();
 
-function DecodeInventory(Row: {instancedItems: string, stackedItems: string} | undefined){
-    return {
-        instancedItems: Row ? JSON.parse(Row.instancedItems) as any[] : [],
-        stackedItems: Row ? JSON.parse(Row.stackedItems) as any[] : [],
-    };
-}
-
 function FindQuantity(StackedItems: any[], CatalogId: string){
     return StackedItems.find((Item) => Item.catalogId === CatalogId)?.quantity ?? 0;
 }
@@ -270,12 +263,6 @@ export async function GetLadyLuckCatalog(UserId: string){
     const CharacterId = await GetPrimaryCharacterId(UserId);
     const Row = CharacterId ? await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}) : undefined;
     const Current = DecodeInventory(Row);
-    if(Row && ReconcileTrialsCosmeticOwnership(Current.instancedItems, Current.stackedItems)){
-        await GetDb().update(inventory).set({
-            instancedItems: JSON.stringify(Current.instancedItems),
-            stackedItems: JSON.stringify(Current.stackedItems),
-        }).where(eq(inventory.characterId, CharacterId!));
-    }
     const Owned = new Set([
         ...Current.instancedItems.map((Item) => Item.catalogId),
         ...Current.stackedItems.filter((Item) => Item.quantity > 0).map((Item) => Item.catalogId),
@@ -354,7 +341,6 @@ export async function PurchaseFromToken(UserId: string, Token: string, Currency?
             }
             const Row = Tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId!)}).sync();
             const Current = DecodeInventory(Row);
-            ReconcileTrialsCosmeticOwnership(Current.instancedItems, Current.stackedItems);
             const Owned = new Set([...Current.instancedItems.map((Item) => Item.catalogId), ...Current.stackedItems.filter((Item) => Item.quantity > 0).map((Item) => Item.catalogId)]);
             if(Sku.maxAllowed != null && (Sku.items.some((Item) => Owned.has(Item.catalogId)) || (Sku.duplicateInstancedItems ?? []).some((Id) => Owned.has(Id)))){
                 return {success: false, error: "already_owned"} as PurchaseResult;

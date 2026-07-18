@@ -13,7 +13,14 @@ export type InventoryTransactionData = {
     removedInstancedItems: any[];
 };
 
-const NonConsumableCatalogIdRegex = /^(QI_.*|CONTAINER_CORE_.*_CELLCORE)$/;
+const RemovalBlockPattern = process.env.INVENTORY_REMOVAL_BLOCK_REGEX ?? "^(QI_.*|CONTAINER_CORE_.*_CELLCORE)$";
+let RemovalBlockRegex: RegExp;
+try {
+    RemovalBlockRegex = new RegExp(RemovalBlockPattern);
+}
+catch (error) {
+    throw new Error(`Invalid INVENTORY_REMOVAL_BLOCK_REGEX ${JSON.stringify(RemovalBlockPattern)}: ${error instanceof Error ? error.message : error}`);
+}
 
 class InventoryConflictError extends Error {
     constructor(message: string){
@@ -37,12 +44,19 @@ function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInse
     };
 }
 
-function FindInstancedItemIndex(InstancedItems: any[], InstanceId: string){
-    return InstancedItems.findIndex((Item) => Item.instanceId === InstanceId);
-}
-
 function HasStatelessItemData(Item: any){
     return !Object.prototype.hasOwnProperty.call(Item, "itemData") || Item.itemData == null;
+}
+
+function IsRemovalBlocked(Item: any){
+    return typeof Item?.catalogId === "string" && RemovalBlockRegex.test(Item.catalogId);
+}
+
+export function DecodeInventory(Row: {instancedItems: string, stackedItems: string} | undefined){
+    return {
+        instancedItems: Row ? JSON.parse(Row.instancedItems) as any[] : [],
+        stackedItems: Row ? JSON.parse(Row.stackedItems) as any[] : [],
+    };
 }
 
 function IsAllowedStaleStatelessReplacement(CurrentItem: any, IncomingItem: any, Operation: string){
@@ -97,7 +111,7 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
                 tx.insert(inventory).values(CurrentInventory).run();
             }
 
-            const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+            const {instancedItems: InstancedItems} = DecodeInventory(CurrentInventory);
             const ItemIndex = InstancedItems.findIndex((Item) => Item.catalogId === CatalogId && Item.instanceId === InstanceId);
 
             if(ItemIndex < 0){
@@ -164,7 +178,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         return {success: false, error: "forbidden"};
     }
 
-    const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToRemove.length > 0 || InstancedItemsToSave.length > 0;
+    const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToSave.length > 0 || InstancedItemsToRemove.length > 0;
     const ShouldTouchStackedItems = StackedItemsToAdd.length > 0 || StackedItemsToRemove.length > 0;
 
     if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
@@ -184,64 +198,51 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             }
 
             const Update: Partial<typeof inventory.$inferInsert> = {};
+            const Current = DecodeInventory(CurrentInventory);
 
             if(ShouldTouchInstancedItems){
-                const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+                const InstancedItems = Current.instancedItems;
+                const ItemByInstanceId = new Map<any, any>();
+                for(const Item of InstancedItems){
+                    if(!ItemByInstanceId.has(Item.instanceId)) ItemByInstanceId.set(Item.instanceId, Item);
+                }
                 let DidUpdateInstancedItems = false;
 
-                for(const ItemToRemove of InstancedItemsToRemove){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
-
-                    if(ItemIndex >= 0){
-                        if(NonConsumableCatalogIdRegex.test(ItemToRemove?.catalogId) || NonConsumableCatalogIdRegex.test(InstancedItems[ItemIndex]?.catalogId)){
-                            continue;
-                        }
-
-                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
-                        const [RemovedItem] = InstancedItems.splice(ItemIndex, 1);
-                        TransactionData.removedInstancedItems.push(RemovedItem);
-                        DidUpdateInstancedItems = true;
-                    }
-                }
-
-                for(const ItemToSave of InstancedItemsToSave){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
-
-                    if(ItemIndex >= 0){
-                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToSave, "save") === "skip"){
-                            continue;
-                        }
-
-                        InstancedItems[ItemIndex] = ItemToSave;
-                        TransactionData.updatedInstancedItems.push(ItemToSave);
+                const UpsertItem = (Item: any, Operation: "save" | "add") => {
+                    const Existing = ItemByInstanceId.get(Item.instanceId);
+                    if(Existing != undefined){
+                        if(AssertExistingInstancedItemWrite(Existing, Item, Operation) === "skip") return;
+                        InstancedItems[InstancedItems.indexOf(Existing)] = Item;
+                        ItemByInstanceId.set(Item.instanceId, Item);
+                        TransactionData.updatedInstancedItems.push(Item);
                         DidUpdateInstancedItems = true;
                     }
                     else{
-                        AssertValidIncomingInstancedItem(ItemToSave, "save");
-                        InstancedItems.push(ItemToSave);
-                        TransactionData.createdInstancedItems.push(ItemToSave);
+                        AssertValidIncomingInstancedItem(Item, Operation);
+                        ItemByInstanceId.set(Item.instanceId, Item);
+                        InstancedItems.push(Item);
+                        TransactionData.createdInstancedItems.push(Item);
                         DidUpdateInstancedItems = true;
                     }
+                };
+
+                for(const ItemToSave of InstancedItemsToSave){
+                    UpsertItem(ItemToSave, "save");
                 }
 
                 for(const ItemToAdd of InstancedItemsToAdd){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
+                    UpsertItem(ItemToAdd, "add");
+                }
 
-                    if(ItemIndex >= 0){
-                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToAdd, "add") === "skip"){
-                            continue;
-                        }
-
-                        InstancedItems[ItemIndex] = ItemToAdd;
-                        TransactionData.updatedInstancedItems.push(ItemToAdd);
-                        DidUpdateInstancedItems = true;
-                    }
-                    else{
-                        AssertValidIncomingInstancedItem(ItemToAdd, "add");
-                        InstancedItems.push(ItemToAdd);
-                        TransactionData.createdInstancedItems.push(ItemToAdd);
-                        DidUpdateInstancedItems = true;
-                    }
+                for(const ItemToRemove of InstancedItemsToRemove){
+                    const Existing = ItemByInstanceId.get(ItemToRemove.instanceId);
+                    if(Existing == undefined || IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)) continue;
+                    const ItemIndex = InstancedItems.indexOf(Existing);
+                    if(ItemIndex < 0) continue;
+                    const [RemovedItem] = InstancedItems.splice(ItemIndex, 1);
+                    ItemByInstanceId.delete(ItemToRemove.instanceId);
+                    TransactionData.removedInstancedItems.push(RemovedItem);
+                    DidUpdateInstancedItems = true;
                 }
 
                 if(DidUpdateInstancedItems){
@@ -250,41 +251,36 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             }
 
             if(ShouldTouchStackedItems){
-                const StackedItems: any[] = JSON.parse(CurrentInventory.stackedItems);
-
-                for(const ItemToRemove of StackedItemsToRemove){
-                    if(NonConsumableCatalogIdRegex.test(ItemToRemove?.catalogId)){
-                        continue;
-                    }
-
-                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
-
-                    if(ItemIndex < 0){
-                        continue;
-                    }
-
-                    StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
-
-                    if(StackedItems[ItemIndex].quantity <= 0){
-                        TransactionData.updatedStackedItems.push({...StackedItems[ItemIndex], quantity: 0});
-                        StackedItems.splice(ItemIndex, 1);
-                    }
-                    else{
-                        TransactionData.updatedStackedItems.push(StackedItems[ItemIndex]);
-                    }
+                const StackedItems = Current.stackedItems;
+                const ItemByCatalogId = new Map<string, any>();
+                for(const Item of StackedItems){
+                    if(!ItemByCatalogId.has(Item.catalogId)) ItemByCatalogId.set(Item.catalogId, Item);
                 }
 
                 for(const ItemToAdd of StackedItemsToAdd){
-                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToAdd.catalogId);
-
-                    if(ItemIndex >= 0){
-                        StackedItems[ItemIndex].quantity += ItemToAdd.quantity;
-                        TransactionData.updatedStackedItems.push(StackedItems[ItemIndex]);
+                    const Existing = ItemByCatalogId.get(ItemToAdd.catalogId);
+                    if(Existing){
+                        Existing.quantity += ItemToAdd.quantity;
+                        TransactionData.updatedStackedItems.push(Existing);
                     }
                     else{
                         TransactionData.updatedStackedItems.push(ItemToAdd);
                         StackedItems.push(ItemToAdd);
+                        ItemByCatalogId.set(ItemToAdd.catalogId, ItemToAdd);
                     }
+                }
+
+                for(const ItemToRemove of StackedItemsToRemove){
+                    const Existing = ItemByCatalogId.get(ItemToRemove.catalogId);
+                    if(!Existing || IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)) continue;
+                    Existing.quantity -= Number(ItemToRemove.quantity ?? 0);
+                    if(Existing.quantity <= 0){
+                        const ItemIndex = StackedItems.indexOf(Existing);
+                        if(ItemIndex >= 0) StackedItems.splice(ItemIndex, 1);
+                        ItemByCatalogId.delete(ItemToRemove.catalogId);
+                        Existing.quantity = 0;
+                    }
+                    TransactionData.updatedStackedItems.push(Existing);
                 }
 
                 Update.stackedItems = JSON.stringify(StackedItems);
@@ -324,22 +320,24 @@ export async function GetInventoryForUserIdAndCharacterId(UserId: string, Charac
     }
 
     try{
-        let InventoryFromDb = await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+        const Db = GetDb();
+        let InventoryFromDb = await Db.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
 
         if(InventoryFromDb == undefined){
             logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
 
             InventoryFromDb = MakeEmptyInventoryRow(CharacterId);
 
-            await GetDb().insert(inventory).values(InventoryFromDb);
+            await Db.insert(inventory).values(InventoryFromDb);
         }
 
+        const {instancedItems: InstancedItems, stackedItems: StackedItems} = DecodeInventory(InventoryFromDb);
         return {
             success: true,
             data: {
                 characterId: CharacterId,
-                instancedItems: JSON.parse(InventoryFromDb!.instancedItems),
-                stackedItems: JSON.parse(InventoryFromDb!.stackedItems)
+                instancedItems: InstancedItems,
+                stackedItems: StackedItems
             }
         };
     }
