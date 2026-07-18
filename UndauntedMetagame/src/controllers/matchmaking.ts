@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import { UpdatePlayerLocation, UpdatePlayerMatchmakingActivity } from "./undauntedapi";
 import { GetPartyById, GetPartyForPlayer } from "./party";
 
-const MATCHMAKING_MODE = process.env.MATCHMAKING_MODE;
-const DEPLOYSERVER_URL = process.env.DEPLOYSERVER_URL;
 const DEPLOYSERVER_MATCHMAKING_PATH = "/api/matchmaker/handle-matchmaking-for-player";
 const DEPLOYSERVER_TOUCH_PLAYER_PATH = "/api/matchmaker/touch-player";
 const DEPLOYSERVER_STATUS_PATH = "/api/matchmaker/player-server-status";
@@ -14,6 +12,14 @@ const DEPLOYSERVER_STATUS_TIMEOUT_MS = Number(process.env.DEPLOYSERVER_STATUS_TI
 const MATCHMAKING_QUEUE_WAIT_MS = Number(process.env.MATCHMAKING_QUEUE_WAIT_SECONDS || "3") * 1000;
 const MATCHMAKING_RECONNECT_WINDOW_MS = Number(process.env.MATCHMAKING_RECONNECT_WINDOW_SECONDS || "120") * 1000;
 const MATCHMAKING_SESSION_TTL_MS = Number(process.env.MATCHMAKING_SESSION_TTL_SECONDS || "300") * 1000;
+
+function MatchmakingMode(){
+    return process.env.MATCHMAKING_MODE;
+}
+
+function DeployserverUrl(){
+    return process.env.DEPLOYSERVER_URL;
+}
 
 export type MatchmakingPhase = "QUEUED" | "STARTING" | "READY" | "FAILED" | "EXPIRED";
 
@@ -213,7 +219,7 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
         freshInstance: FreshInstance
     }, "Requesting deploy server matchmaking");
 
-    const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_MATCHMAKING_PATH;
+    const URL = "http://" + DeployserverUrl() + DEPLOYSERVER_MATCHMAKING_PATH;
 
     let MatchmakingResult: Response;
 
@@ -276,14 +282,14 @@ async function LaunchGameOnDeployserver(GameMode: string, GameArgs: string, Hunt
 }
 
 async function QueryDeployserverForPlayerStatus(PlayerId: string): Promise<DeployserverPlayerStatus>{
-    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
+    if(MatchmakingMode() !== "DEPLOYSERVER"){
         return {
             found: false,
             joinable: false
         };
     }
 
-    const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_STATUS_PATH;
+    const URL = "http://" + DeployserverUrl() + DEPLOYSERVER_STATUS_PATH;
 
     try{
         const StatusResult = await fetch(URL, {
@@ -316,11 +322,11 @@ async function QueryDeployserverForPlayerStatus(PlayerId: string): Promise<Deplo
 }
 
 export async function TouchDeployserverForPlayerActivity(PlayerId: string){
-    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
+    if(MatchmakingMode() !== "DEPLOYSERVER"){
         return false;
     }
 
-    const URL = "http://" + DEPLOYSERVER_URL + DEPLOYSERVER_TOUCH_PLAYER_PATH;
+    const URL = "http://" + DeployserverUrl() + DEPLOYSERVER_TOUCH_PLAYER_PATH;
 
     try{
         const TouchResult = await fetch(URL, {
@@ -713,13 +719,13 @@ export async function HandlePlayerMatchmaking(GameMode: string, GameArgs: string
     partyId?: string;
     privateMatch?: boolean;
 } = {}){
-    if(MATCHMAKING_MODE === "DISABLED"){
+    if(MatchmakingMode() === "DISABLED"){
         logger.warn("Matchmaking is disabled, refusing MM!");
 
         return undefined;
     }
 
-    if(MATCHMAKING_MODE !== "DEPLOYSERVER"){
+    if(MatchmakingMode() !== "DEPLOYSERVER"){
         logger.fatal("Unsupported MATCHMAKING_MODE!");
 
         return undefined;

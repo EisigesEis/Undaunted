@@ -15,6 +15,8 @@
     "test:mastery": "tsx src/selftests/mastery.ts",
     "test:store": "tsx src/selftests/store.ts",
     "test:huntpass": "tsx src/selftests/huntpass.ts",
+    "test:inventory": "tsx src/selftests/inventory.ts",
+    "test": "tsx src/selftests/run.ts",
     "start": "node --env-file=.env dist/server.js",
     "db:generate": "drizzle-kit generate"
   },

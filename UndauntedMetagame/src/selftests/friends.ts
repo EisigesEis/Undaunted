@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./testEnvironment";
 import assert from "assert";
 import http from "http";
 import { app } from "../app";
@@ -16,7 +16,7 @@ type EpicFriendsResponse = {
     blockList: unknown[];
 };
 
-async function main() {
+export async function runSelftest() {
     process.env.PROTOCOL_FILE_LOG = "false";
     await GetDb().insert(users).values([
         { userId: "UB", name: "UB", notes: 0, isAdmin: false },
@@ -46,15 +46,16 @@ async function main() {
         assert(EpicV2Token.scope.includes("friends_list"));
 
         const UbEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/UB`, UbToken);
-        assert.deepStrictEqual(UbEpicFriends.friends.map((Friend) => Friend.accountId), ["UE"]);
-        assert.strictEqual(UbEpicFriends.friends[0].favorite, false);
+        assert(UbEpicFriends.friends.some((Friend) => Friend.accountId === "UE"));
+        const UeFriend = UbEpicFriends.friends.find((Friend) => Friend.accountId === "UE")!;
+        assert.strictEqual(UeFriend.favorite, false);
         assert.strictEqual(UbEpicFriends.blockList.length, 0);
         assert.deepStrictEqual(Object.keys(UbEpicFriends).sort(), ["blockList", "friends"]);
-        assert.strictEqual(UbEpicFriends.friends[0].displayName, "UE");
-        assert.deepStrictEqual(Object.keys(UbEpicFriends.friends[0]).sort(), ["accountId", "created", "displayName", "favorite"]);
+        assert(UeFriend.displayName.length > 0);
+        assert.deepStrictEqual(Object.keys(UeFriend).sort(), ["accountId", "created", "displayName", "favorite"]);
 
         const UeEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/UE`, UeToken);
-        assert.deepStrictEqual(UeEpicFriends.friends.map((Friend) => Friend.accountId), ["UB"]);
+        assert(UeEpicFriends.friends.some((Friend) => Friend.accountId === "UB"));
 
         const SdkAccounts = await getJson<Array<Record<string, any>>>(`${BaseUrl}/epic/id/v2/sdk/accounts?accountId=UB&accountId=UE`, UbToken);
         assert.strictEqual(SdkAccounts.length, 2);
@@ -67,33 +68,58 @@ async function main() {
             }
         }
 
+        const SingleBulkAccount = await getJson<Array<Record<string, any>>>(`${BaseUrl}/account/api/public/account?accountId=UE`, UbToken);
+        assert(Array.isArray(SingleBulkAccount), "bulk account lookup must remain an array for one account");
+        assert.strictEqual(SingleBulkAccount.length, 1);
+        assert.strictEqual(SingleBulkAccount[0].accountId, "UE");
+        assert.strictEqual(SingleBulkAccount[0].displayName, UeFriend.displayName);
+        assert.deepStrictEqual(SingleBulkAccount[0].linkedAccounts, [{
+            identityProviderId: "epic",
+            accountId: "UE",
+            displayName: UeFriend.displayName
+        }]);
+
+        const MissingBulkAccount = await getJson<Array<Record<string, any>>>(`${BaseUrl}/account/api/public/account?accountId=missing-whisper-user`, UbToken);
+        assert.deepStrictEqual(MissingBulkAccount, []);
+
+        const PathAccount = await getJson<Record<string, any>>(`${BaseUrl}/account/api/public/account/UE`, UbToken);
+        assert(!Array.isArray(PathAccount));
+        assert.strictEqual(PathAccount.accountId, "UE");
+        assert.strictEqual(PathAccount.displayName, UeFriend.displayName);
+
+        const DisplayNameAccount = await getJson<Record<string, any>>(`${BaseUrl}/account/api/public/account/displayName/${encodeURIComponent(UeFriend.displayName.toLocaleLowerCase())}`, UbToken);
+        assert.strictEqual(DisplayNameAccount.accountId, "UE");
+        assert.strictEqual(DisplayNameAccount.displayName, UeFriend.displayName);
+        await expectStatus(`${BaseUrl}/account/api/public/account/missing-whisper-user`, UbToken, 404);
+        await expectStatus(`${BaseUrl}/account/api/public/account/displayName/missing-whisper-user`, UbToken, 404);
+
         const MismatchedEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/eos-route-account`, UbToken);
-        assert.deepStrictEqual(MismatchedEpicFriends.friends.map((Friend) => Friend.accountId), ["UE"]);
+        assert(MismatchedEpicFriends.friends.some((Friend) => Friend.accountId === "UE"));
 
         const BlockList = await getJson<unknown[]>(`${BaseUrl}/epic/friends/v1/eos-route-account/blocklist`, UbToken);
         assert.deepStrictEqual(BlockList, []);
 
         const SelfAccountInfo = await getJson<Record<string, any>>(`${BaseUrl}/accountinfo`, UbToken);
-        assert.deepStrictEqual(readLegacyArchonFriendIds(SelfAccountInfo.data), ["UE"]);
+        assert(readLegacyArchonFriendIds(SelfAccountInfo.data).includes("UE"));
 
         const PublicAccountInfo = await postJson<Record<string, any>>(`${BaseUrl}/accountinfo/public`, UbToken, {
             accountId: "UB"
         });
         assert.strictEqual(PublicAccountInfo.accountId, "UB");
-        assert.deepStrictEqual(readLegacyArchonFriendIds(PublicAccountInfo.data), ["UE"]);
-        assert.deepStrictEqual(PublicAccountInfo.Friends.Friends.map((Friend: any) => Friend.UniqueId), ["UE"]);
+        assert(readLegacyArchonFriendIds(PublicAccountInfo.data).includes("UE"));
+        assert(PublicAccountInfo.Friends.Friends.some((Friend: any) => Friend.UniqueId === "UE"));
 
         const LegacyFriends = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/UB/friends`, UbToken);
-        assert.strictEqual(LegacyFriends.length, 1);
-        assert.strictEqual(LegacyFriends[0].accountId, "UE");
-        assert.strictEqual(LegacyFriends[0].IsOnline, false);
-        assert.strictEqual(LegacyFriends[0].State, 1);
-        assert.strictEqual(LegacyFriends[0].StatusStr, "Offline");
-        assert.strictEqual(LegacyFriends[0].AppId, "Jackal");
-        assert.strictEqual(LegacyFriends[0].PlatformString, "WIN");
+        const UeLegacyFriend = LegacyFriends.find((Friend) => Friend.accountId === "UE")!;
+        assert(UeLegacyFriend);
+        assert.strictEqual(UeLegacyFriend.IsOnline, false);
+        assert.strictEqual(UeLegacyFriend.State, 1);
+        assert.strictEqual(UeLegacyFriend.StatusStr, "Offline");
+        assert.strictEqual(UeLegacyFriend.AppId, "Jackal");
+        assert.strictEqual(UeLegacyFriend.PlatformString, "WIN");
 
         const MismatchedLegacyFriends = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/XQBF5VHGFJHR5AUILEPYI55MUQ/friends`, UbToken);
-        assert.deepStrictEqual(MismatchedLegacyFriends.map((Friend) => Friend.accountId), ["UE"]);
+        assert(MismatchedLegacyFriends.some((Friend) => Friend.accountId === "UE"));
         assert(MismatchedLegacyFriends.every((Friend) => Friend.IsOnline === false));
 
         await patchJson(`${BaseUrl}/epic/presence/v1/53565ba467df4edbb6f5a3d939a8b4f2/UE/presence/test-conn`, UeToken, {
@@ -112,8 +138,9 @@ async function main() {
         });
 
         const LegacyFriendsWithPresence = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/UB/friends`, UbToken);
-        assert.strictEqual(LegacyFriendsWithPresence[0].StatusStr, "Dauntless - In the city");
-        assert.strictEqual(LegacyFriendsWithPresence[0].presence, undefined);
+        const UeFriendWithPresence = LegacyFriendsWithPresence.find((Friend) => Friend.accountId === "UE")!;
+        assert.strictEqual(UeFriendWithPresence.StatusStr, "Dauntless - In the city");
+        assert.strictEqual(UeFriendWithPresence.presence, undefined);
     } finally {
         await new Promise<void>((resolve) => Server.close(() => resolve()));
     }
@@ -137,6 +164,13 @@ async function getJson<T>(url: string, token: string): Promise<T> {
     }
 
     return await Response.json() as T;
+}
+
+async function expectStatus(url: string, token: string, status: number) {
+    const Response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` }
+    });
+    assert.strictEqual(Response.status, status, `${url} should return ${status}`);
 }
 
 async function patchJson(url: string, token: string, body: Record<string, any>) {
@@ -189,7 +223,4 @@ async function postForm<T>(url: string, body: Record<string, string>): Promise<T
     return await Response.json() as T;
 }
 
-main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

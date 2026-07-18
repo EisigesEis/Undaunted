@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./testEnvironment";
 import assert from "node:assert";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -9,7 +9,7 @@ import { SignMetagameJWTForUid } from "../controllers/auth";
 import progressionConfig from "../vendor/progression_config.json";
 import { RankForTrackProgress } from "../controllers/mastery";
 
-async function main() {
+export async function runSelftest() {
   await GetDb().insert(users).values([
     { userId: "mastery-user", name: "Mastery", notes: 0, isAdmin: false },
     { userId: "other-user", name: "Other", notes: 0, isAdmin: false }
@@ -136,4 +136,4 @@ async function main() {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }
-main().catch(error => { console.error(error); process.exit(1); });
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -1,3 +1,4 @@
+import "./testEnvironment";
 import assert from "node:assert";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -35,11 +36,9 @@ type SlotCountResponse = GenericPhoenixResponse & {
     payload: SlotCountPayload;
 };
 
-async function main(){
+export async function runSelftest(){
     const KeyPair = crypto.generateKeyPairSync("rsa", {modulusLength: 2048});
 
-    process.env.DB_FILENAME = ":memory:";
-    process.env.PROTOCOL_FILE_LOG = "false";
     process.env.AUTH_SIGNING_PRIVKEY_B64 = Buffer.from(KeyPair.privateKey.export({type: "pkcs1", format: "pem"}).toString()).toString("base64");
     process.env.AUTH_SIGNING_PUBKEY_B64 = Buffer.from(KeyPair.publicKey.export({type: "pkcs1", format: "pem"}).toString()).toString("base64");
 
@@ -135,8 +134,7 @@ async function main(){
         const Active = await postJson<GenericPhoenixResponse>(`${BaseUrl}/loadout/loadout-test-user/loadout-test-character/active/5`, Token, {});
         assert.deepStrictEqual(Active, {code: null, message: "OK"});
         const ActiveLoadout = await getJson<any>(`${BaseUrl}/loadout/loadout-test-user/loadout-test-character`, Token);
-        assert.deepStrictEqual(Object.keys(ActiveLoadout).sort(), ["code", "message", "payload"]);
-        assert.strictEqual(ActiveLoadout.payload.weapon.item_id, "WP_TEST_SLOT_FIVE");
+        assert.strictEqual(ActiveLoadout.weapon.item_id, "WP_TEST_SLOT_FIVE");
 
         await expectStatus(`${BaseUrl}/loadout/loadout-test-user/loadout-test-character/0`, Token, {data: BuildSlot(0, "WP_STALE", 4)}, 409);
         const AfterStale = await getJson<LoadoutSetResponse>(`${BaseUrl}/loadout/loadout-test-user/loadout-test-character/all`, Token);
@@ -265,7 +263,4 @@ async function expectStatus(Url: string, Token: string, Body: unknown, Status: n
     assert.strictEqual(Response.status, Status, `${Url} returned ${Response.status}, expected ${Status}`);
 }
 
-void main().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-});
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

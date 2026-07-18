@@ -21,7 +21,7 @@ type TestClient = {
     waitFor: (predicate: (message: string) => boolean, label: string) => Promise<string>;
 };
 
-async function main() {
+export async function runSelftest() {
     process.env.PROTOCOL_FILE_LOG = "false";
     await GetDb().insert(users).values([
         {userId: "alice", name: "Alice", notes: 0, isAdmin: false},
@@ -308,7 +308,4 @@ function waitForMessage(
     });
 }
 
-main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

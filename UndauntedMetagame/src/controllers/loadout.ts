@@ -72,6 +72,7 @@ const DEFAULT_BANNER_CUSTOMIZATION = JSON.stringify({
     BorderSheenType: 0,
     SigilSheenType: 0
 });
+const MAX_LOADOUT_DATA_BYTES = 1024 * 1024;
 
 // RE: 1.4.4 omit empty quick-curiosity placeholders to prevent invalid item lookup.
 const DEFAULT_QUICK_CURIOSITIES_ITEMS: Array<{
@@ -334,6 +335,11 @@ export async function SetLoadoutDataForUserIdAndCharacterId(UserId: string, Char
     // TODO: `data` is stored as-is. Maybe loadout parser for validation?
     if(!isLoadoutJsonObject(ParsedData)){
         logger.error(`Invalid loadout data shape for index ${Index}`);
+        return {success: false, statusCode: 400};
+    }
+
+    if(Buffer.byteLength(JSON.stringify(ParsedData), "utf8") > MAX_LOADOUT_DATA_BYTES){
+        logger.error(`Loadout data exceeds ${MAX_LOADOUT_DATA_BYTES} bytes for index ${Index}`);
         return {success: false, statusCode: 400};
     }
 

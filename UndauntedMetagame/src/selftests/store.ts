@@ -1,6 +1,7 @@
+import "./testEnvironment";
 import assert from "node:assert";
 
-async function main(){
+export async function runSelftest(){
     const {GetDb} = await import("../db");
     const {characters, inventory, users} = await import("../db/schema");
     const {CreatePurchaseToken, GetBalancesForUser, GetLadyLuckCatalog, GetStoreCatalog, LadyLuckCatalog, PurchaseFromToken} = await import("../controllers/store");
@@ -118,4 +119,4 @@ async function main(){
     console.log("Store selftest passed");
 }
 
-void main().catch((Error) => { console.error(Error); process.exitCode = 1; });
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

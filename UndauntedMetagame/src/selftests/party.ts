@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./testEnvironment";
 import assert from "assert";
 import http from "http";
 
@@ -51,7 +51,7 @@ const F = "YDEVXPSWGVH25KVD77DLJEAGYQ";
 const G = "K5CLRVB47NDTPKYN5P7EMDOGG4";
 const H = "YGCW2QNUTFD4NME2MH4U2HCS2U";
 
-async function main() {
+export async function runSelftest() {
     process.env.PROTOCOL_FILE_LOG = "false";
     process.env.MATCHMAKING_MODE = "DEPLOYSERVER";
     process.env.MATCHMAKING_QUEUE_WAIT_SECONDS = "60";
@@ -477,7 +477,4 @@ function readJson<T>(request: http.IncomingMessage) {
     });
 }
 
-main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });

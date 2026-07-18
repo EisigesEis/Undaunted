@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../selftests/testEnvironment";
 import assert from "assert";
 import http from "http";
 import WebSocket from "ws";
@@ -25,7 +25,7 @@ type TestClient = {
 const TestUserId = "stomp-test-user-a";
 const TestFriendId = "stomp-test-user-b";
 
-async function main() {
+export async function runSelftest() {
     process.env.PROTOCOL_FILE_LOG = "false";
 
     const server = http.createServer((_req, res) => {
@@ -198,7 +198,4 @@ function ParseStompJson(message: string) {
     return JSON.parse(Body);
 }
 
-main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) void runSelftest().catch((error) => { console.error(error); process.exitCode = 1; });
