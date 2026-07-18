@@ -106,3 +106,43 @@ export const invitecodes = sqliteTable("invitecodes", {
     usesRemaining: integer("usesRemaining").notNull(),
     infiniteUses: integer("infiniteUses", {mode: "boolean"}).notNull()
 });
+
+export const progressiontracks = sqliteTable("progressiontracks", {
+    userId: text("userId").notNull(),
+    progressionId: text("progressionId").notNull(),
+    progress: integer("progress").notNull().default(0),
+    confirmedFreemiumRank: integer("confirmedFreemiumRank").notNull().default(0),
+    confirmedPremiumRank: integer("confirmedPremiumRank").notNull().default(0),
+    confirmedDate: text("confirmedDate"),
+    lastModifiedDate: text("lastModifiedDate").notNull()
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.progressionId] }) }));
+
+export const progressionobjectives = sqliteTable("progressionobjectives", {
+    userId: text("userId").notNull(),
+    objectiveId: text("objectiveId").notNull(),
+    progress: integer("progress").notNull().default(0),
+    completedCount: integer("completedCount").notNull().default(0),
+    createdDate: text("createdDate").notNull(),
+    lastModifiedDate: text("lastModifiedDate").notNull()
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.objectiveId] }) }));
+
+export const progressionreceipts = sqliteTable("progressionreceipts", {
+    userId: text("userId").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    response: text("response").notNull(),
+    createdDate: text("createdDate").notNull()
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.fingerprint] }) }));
+
+export const cooldowns = sqliteTable("cooldowns", {
+    userId: text("userId").notNull(),
+    cooldownId: text("cooldownId").notNull(),
+    expiresAt: text("expiresAt").notNull(),
+    createdDate: text("createdDate").notNull(),
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.cooldownId] }) }));
+
+export const entitlements = sqliteTable("entitlements", {
+    userId: text("userId").notNull(),
+    entitlement: text("entitlement").notNull(),
+    grantedDate: text("grantedDate").notNull(),
+    expiresAt: text("expiresAt"),
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.entitlement] }) }));

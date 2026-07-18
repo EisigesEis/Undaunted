@@ -12,6 +12,9 @@
     "test:friends": "tsx src/selftests/friends.ts",
     "test:party": "tsx src/selftests/party.ts",
     "test:loadout": "tsx src/selftests/loadout.ts",
+    "test:mastery": "tsx src/selftests/mastery.ts",
+    "test:store": "tsx src/selftests/store.ts",
+    "test:huntpass": "tsx src/selftests/huntpass.ts",
     "start": "node --env-file=.env dist/server.js",
     "db:generate": "drizzle-kit generate"
   },
