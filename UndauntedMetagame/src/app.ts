@@ -18,9 +18,9 @@ import { escalationRouter } from "./routes/escalation.js";
 
 export const app = express();
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "50mb", strict: false }));
 
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.use("/", loginRouter);
 app.use("/", eosRouter);
@@ -38,8 +38,38 @@ app.use("/", friendsRouter);
 app.use("/", escalationRouter);
 app.use("/undaunted/api", undauntedApiRouter); // Everything that I/we add to help manage undaunted that doesn't belong to the game proper belongs here
 
+function LogFullAttempt(req: express.Request, parseError?: unknown) {
+    const { authorization: _Authorization, ...SafeHeaders } = req.headers;
+    logger.warn({
+        method: req.method,
+        url: req.url,
+        originalUrl: req.originalUrl,
+        baseUrl: req.baseUrl,
+        path: req.path,
+        httpVersion: req.httpVersion,
+        remoteAddress: req.socket.remoteAddress,
+        remotePort: req.socket.remotePort,
+        headers: SafeHeaders,
+        query: req.query,
+        params: req.params,
+        body: req.body,
+        parseError: parseError instanceof Error ? parseError.message : parseError
+    }, "Unstubbed route full request");
+}
+
+// Invalid JSON cannot reach the fallback route.
+app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (error instanceof SyntaxError && "body" in error) {
+        LogFullAttempt(req, error);
+        res.status(400).send();
+        return;
+    }
+
+    next(error);
+});
+
 app.use((req, res) => {
-    logger.warn(`Unstubbed route ${req.method} ${req.path}`)
+    LogFullAttempt(req);
 
     res.status(404);
     res.send();

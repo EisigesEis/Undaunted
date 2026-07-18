@@ -8,6 +8,8 @@ import { AttachXmppServer } from "../xmpp/server";
 import { RememberUsernameForUserId } from "../controllers/login";
 import { RegisterSocialSession, UnregisterSocialSession, UpdateSocialPresenceState } from "../controllers/social";
 import { UpdatePlayerActivity } from "../controllers/undauntedapi";
+import { GetDb } from "../db";
+import { users } from "../db/schema";
 
 /**
  * TODO:
@@ -38,7 +40,10 @@ async function main() {
     const Address = server.address();
     assert(Address != undefined && typeof Address !== "string");
     const BaseUrl = `ws://127.0.0.1:${Address.port}`;
-    process.env.SOCIAL_FRIEND_USER_IDS = `${TestUserId},${TestFriendId}`;
+    await GetDb().insert(users).values([
+        {userId: TestUserId, name: "STOMP Test User", notes: 0, isAdmin: false},
+        {userId: TestFriendId, name: "STOMP Test Friend", notes: 0, isAdmin: false}
+    ]).onConflictDoNothing();
     RememberUsernameForUserId(TestUserId, "STOMP Test User");
     RememberUsernameForUserId(TestFriendId, "STOMP Test Friend");
     const Token = SignMetagameJWTForUid(TestUserId);
@@ -49,19 +54,19 @@ async function main() {
 
     Alice.ws.send("SUBSCRIBE\nid:friends\ndestination:/topic/friends\n\n\0");
     await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes("presence.updated"), "subscription message");
-    const FriendSnapshot = ParseStompJson(await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"source":"configured-friend"'), "configured friend online snapshot"));
-    assert.strictEqual(FriendSnapshot.online, true);
-    assert.strictEqual(FriendSnapshot.IsOnline, true);
-    assert.strictEqual(FriendSnapshot.State, 0);
-    assert.strictEqual(FriendSnapshot.StatusStr, "Online");
+    const FriendSnapshot = ParseStompJson(await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"source":"offline"'), "friend offline snapshot"));
+    assert.strictEqual(FriendSnapshot.IsOnline, false);
+    assert.strictEqual(FriendSnapshot.State, 1);
+    assert.strictEqual(FriendSnapshot.StatusStr, "Offline");
     assert.strictEqual(FriendSnapshot.AppId, "Jackal");
     assert.strictEqual(FriendSnapshot.PlatformString, "WIN");
-    assert.strictEqual(FriendSnapshot.presence.IsOnline, true);
-    assert.strictEqual(FriendSnapshot.presence.State, 0);
+    assert.strictEqual(FriendSnapshot.presence.IsOnline, false);
+    assert.strictEqual(FriendSnapshot.presence.State, 1);
 
     await UpdatePlayerActivity(TestFriendId, "Ramsgate_City");
     const ActiveFriendSession = RegisterSocialSession(TestFriendId, "xmpp");
-    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"online":true') && Message.includes("In Ramsgate"), "friend activity presence broadcast");
+    const ActivityBroadcast = ParseStompJson(await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes("In Ramsgate"), "friend activity presence broadcast"));
+    assert.strictEqual(ActivityBroadcast.IsOnline, true);
     UpdateSocialPresenceState(TestFriendId, {
         status: "Dauntless - In a hunt",
         richPresence: "Dauntless - In a hunt",
@@ -75,7 +80,7 @@ async function main() {
         bHasVoiceSupport: false,
         sessionId: "hunt-selftest"
     });
-    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"Dauntless - In a hunt"') && Message.includes('"RichPresence_s":"InAHunt"'), "friend xmpp rich presence broadcast");
+    await Alice.waitFor((Message) => Message.startsWith("MESSAGE") && Message.includes(`"userId":"${TestFriendId}"`) && Message.includes('"Dauntless - In a hunt"') && Message.includes('"StatusStr":"Dauntless - In a hunt"'), "friend XMPP presence broadcast");
 
     Alice.ws.send("\n");
     assert.strictEqual(Alice.ws.readyState, WebSocket.OPEN);

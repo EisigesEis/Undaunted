@@ -152,7 +152,7 @@ undauntedApiRouter.get("/PrivateOnlineStats", HasUndauntedAdminApiKey, async (re
 undauntedApiRouter.get("/SocialDebug", HasUndauntedAdminApiKey, async (req, res) => {
     res.status(200);
     res.json({
-        FriendUserIds: GetSocialFriendUserIds(),
+        FriendUserIds: await GetSocialFriendUserIds(),
         Social: GetSocialDebugState(),
         Stomp: GetStompDebugState(),
         Xmpp: GetXmppDebugState()

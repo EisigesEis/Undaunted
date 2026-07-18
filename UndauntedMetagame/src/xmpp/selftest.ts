@@ -6,6 +6,8 @@ import { SignMetagameJWTForUid } from "../controllers/auth";
 import { BuildFriendPayload, BuildPresenceResult } from "../controllers/friends";
 import { RememberUsernameForUserId } from "../controllers/login";
 import { AcceptPartyInvite, CreatePartyInvite, KickPartyMember, GetOrCreatePartyForPlayer, ResetPartyStateForTests } from "../controllers/party";
+import { GetDb } from "../db";
+import { users } from "../db/schema";
 import { AttachXmppServer } from "./server";
 
 /**
@@ -21,7 +23,14 @@ type TestClient = {
 
 async function main() {
     process.env.PROTOCOL_FILE_LOG = "false";
-    process.env.SOCIAL_FRIEND_USER_IDS = "alice,bob";
+    await GetDb().insert(users).values([
+        {userId: "alice", name: "Alice", notes: 0, isAdmin: false},
+        {userId: "bob", name: "Bob", notes: 0, isAdmin: false},
+        {userId: "eve", name: "Eve", notes: 0, isAdmin: false},
+        {userId: process.env.LOCAL_USER_ID ?? "UB", name: "Local Config User", notes: 0, isAdmin: false},
+        {userId: "UID-generated-local-user", name: "UID-generated-local-user", notes: 0, isAdmin: false},
+        {userId: "local-display-user", name: "Local Slayer", notes: 0, isAdmin: false}
+    ]).onConflictDoNothing();
 
     const server = http.createServer((_req, res) => {
         res.statusCode = 404;
@@ -60,9 +69,9 @@ async function main() {
 
     Alice.ws.send(`<iq type="get" id="roster-alice"><query xmlns="jabber:iq:roster"/></iq>`);
     const AliceRoster = await Alice.waitFor((Message) => Message.includes('id="roster-alice"') && Message.includes('jabber:iq:roster'), "alice roster result");
-    assert(AliceRoster.includes('jid="bob@prod.ol.epicgames.com"'), "configured friend should be listed in XMPP roster");
-    assert(AliceRoster.includes('name="Bob"'), "configured friend roster item should include display name");
-    assert(AliceRoster.includes('subscription="both"'), "configured friend roster item should be an accepted two-way subscription");
+    assert(AliceRoster.includes('jid="bob@prod.ol.epicgames.com"'), "server member should be listed in XMPP roster");
+    assert(AliceRoster.includes('name="Bob"'), "friend roster item should include display name");
+    assert(AliceRoster.includes('subscription="both"'), "friend roster item should be an accepted two-way subscription");
     const AliceBobPresence = await Alice.waitFor((Message) => Message.includes('from="bob@prod.ol.epicgames.com') && Message.includes("&quot;IsOnline&quot;:true") && Message.includes("&quot;AppId&quot;:&quot;Jackal&quot;"), "alice receives bob direct friend presence");
     assert(AliceBobPresence.includes("&quot;State&quot;:0"), "direct friend presence should include online Archon state");
     assert(AliceBobPresence.includes("&quot;PlatformString&quot;:&quot;WIN&quot;"), "direct friend presence should include platform");
@@ -70,13 +79,12 @@ async function main() {
     Alice.ws.send(`<presence><status>{"Status":"Dauntless - In the city","bIsPlaying":false,"bIsJoinable":false,"bHasVoiceSupport":false,"SessionId":"","Properties":{"RichPresence_s":"InTheCity","PartyPlayerCountData_i":1}}</status></presence>`);
     await Alice.waitFor((Message) => Message.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`) && Message.includes(`to="alice@prod.ol.epicgames.com/${AliceResource}"`), "alice self presence ack");
     const AlicePresence = (await BuildPresenceResult("alice")).payload;
-    assert.strictEqual(AlicePresence.online, true);
-    assert.strictEqual(AlicePresence.status, "online");
-    assert.strictEqual(AlicePresence.richPresence, "Dauntless - In the city");
-    assert.strictEqual((AlicePresence.properties as Record<string, unknown>).RichPresence_s, "InTheCity");
+    assert.strictEqual(AlicePresence.IsOnline, true);
+    assert.strictEqual(AlicePresence.State, 0);
+    assert.strictEqual(AlicePresence.StatusStr, "Dauntless - In the city");
     const AliceFriend = await BuildFriendPayload("alice");
-    assert.strictEqual(AliceFriend.online, true);
-    assert.strictEqual(AliceFriend.richPresence, "Dauntless - In the city");
+    assert.strictEqual(AliceFriend.IsOnline, true);
+    assert.strictEqual(AliceFriend.StatusStr, "Dauntless - In the city");
 
     Alice.ws.send(`<presence to="${Room}/${AliceNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
     Bob.ws.send(`<presence to="${Room}/${BobNick}"><x xmlns="http://jabber.org/protocol/muc"><history maxstanzas="50"/></x></presence>`);
@@ -148,7 +156,9 @@ async function main() {
     assert(!Bob.messages.some((Message) => Message.includes('id="party-after-kick"')), "kicked party member should not receive later party messages");
 
     Alice.ws.send(`<message type="chat" id="private-1" to="bob@prod.ol.epicgames.com"><body>Hello Bob</body></message>`);
-    await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "bob private delivery");
+    const PrivateDelivery = await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "bob private delivery");
+    assert(PrivateDelivery.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), "private delivery should identify the sender by full JID");
+    assert(PrivateDelivery.includes(`to="bob@prod.ol.epicgames.com/${BobResource}"`), "private delivery should target the recipient full JID");
     assert(!Alice.messages.some((Message) => Message.includes('id="private-1"') && Message.includes("Hello Bob")), "private message should not be echoed to sender when recipient is online");
 
     Alice.ws.send(`<message type="chat" id="private-userid" to="bob"><body>Hello Bob by account</body></message>`);
@@ -158,7 +168,8 @@ async function main() {
     await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob by display"), "bob display private delivery");
 
     Alice.ws.send(`<message type="chat" id="private-missing" to="Nobody"><body>Hello nobody</body></message>`);
-    await delay(50);
+    const MissingError = await Alice.waitFor((Message) => Message.includes('id="private-missing"') && Message.includes('type="error"'), "unmatched whisper error");
+    assert(MissingError.includes("item-not-found"), "unmatched whisper should return an XMPP item-not-found error");
     assert.strictEqual(Alice.ws.readyState, WebSocket.OPEN, "unmatched whisper should not close sender socket");
 
     Alice.ws.send(`<message type="chat" id="private-offline" to="charlie"><body>Hello offline Charlie</body></message>`);

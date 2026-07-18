@@ -19,7 +19,7 @@ friendsRouter.get("/epic/friends/v1/:accountId", HasUndauntedMetagameAuth, async
         endpoint: "epic.friends",
         authUserId: req.AuthData?.userId,
         pathUserId: AccountId,
-        allowlist: GetSocialFriendUserIds(),
+        friendUserIds: await GetSocialFriendUserIds(),
         friends: Payload.friends.map((Friend) => Friend.accountId),
         responseCount: Payload.friends.length
     }, "Epic friends response");
@@ -135,7 +135,7 @@ friendsRouter.get("/friends/api/v1/:accountId/summary", HasUndauntedMetagameAuth
         endpoint: "friends.summary",
         authUserId: req.AuthData?.userId,
         pathUserId: AccountId,
-        allowlist: GetSocialFriendUserIds(),
+        friendUserIds: await GetSocialFriendUserIds(),
         responseCount: Friends.length
     }, "Friends summary response");
 
@@ -208,8 +208,8 @@ friendsRouter.post([
             requestedUserIds: RequestedAccountIds,
             onlineStates: PresenceEntries.map(([AccountId, Presence]) => ({
                 accountId: AccountId,
-                online: Presence.online,
-                presenceStatus: Presence.presenceStatus
+                online: Presence.IsOnline,
+                presenceStatus: Presence.StatusStr
             }))
         }, "Presence batch response");
 
@@ -231,7 +231,7 @@ async function SendPresence(req: any, res: any, accountId: string, endpoint: str
         authUserId: req.AuthData?.userId,
         requestedUserId: accountId,
         source: Presence.source,
-        online: Presence.payload.online
+        online: Presence.payload.IsOnline
     }, "Presence response");
 
     res.json(Presence.payload);
@@ -408,13 +408,12 @@ async function SendFriendsList(req: any, res: any, accountId: string, endpoint: 
         endpoint: `friends.${endpoint}`,
         authUserId: req.AuthData?.userId,
         pathUserId: accountId,
-        candidateCount: GetSocialFriendUserIds().length,
+        candidateCount: (await GetSocialFriendUserIds()).length,
         filteredIds: Friends.map((Friend) => Friend.accountId),
         onlineStates: Friends.map((Friend) => ({
             accountId: Friend.accountId,
-            online: Friend.online,
-            presenceStatus: Friend.presenceStatus,
-            presence: Friend.presence
+            online: Friend.IsOnline,
+            presenceStatus: Friend.StatusStr
         })),
         responseCount: Friends.length
     }, "Friends list response");

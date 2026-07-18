@@ -65,11 +65,6 @@ export function BuildLinkedAccounts(accountId: string, displayName: string): Lin
             identityProviderId: "epic",
             accountId,
             displayName
-        },
-        {
-            identityProviderId: "steam",
-            accountId,
-            displayName
         }
     ];
 }
@@ -118,10 +113,13 @@ export async function BuildSdkAccountPayload(accountId: string) {
     const Identity = await BuildCanonicalAccountIdentity(accountId);
 
     return {
+        id: Identity.accountId,
         accountId: Identity.accountId,
         displayName: Identity.displayName,
+        name: Identity.displayName,
+        username: Identity.displayName,
         preferredLanguage: Identity.preferredLanguage,
-        linkedAccounts: Identity.linkedAccounts,
-        country: Identity.country
+        country: Identity.country,
+        linkedAccounts: Identity.linkedAccounts
     };
 }

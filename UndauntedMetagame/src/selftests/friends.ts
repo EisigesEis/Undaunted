@@ -3,10 +3,13 @@ import assert from "assert";
 import http from "http";
 import { app } from "../app";
 import { SignMetagameJWTForUid } from "../controllers/auth";
+import { GetDb } from "../db";
+import { users } from "../db/schema";
 
 type EpicFriendsResponse = {
     friends: Array<{
         accountId: string;
+        displayName: string;
         created: string;
         favorite: boolean;
     }>;
@@ -15,7 +18,10 @@ type EpicFriendsResponse = {
 
 async function main() {
     process.env.PROTOCOL_FILE_LOG = "false";
-    process.env.SOCIAL_FRIEND_USER_IDS = "UB,UE";
+    await GetDb().insert(users).values([
+        { userId: "UB", name: "UB", notes: 0, isAdmin: false },
+        { userId: "UE", name: "UE", notes: 0, isAdmin: false }
+    ]).onConflictDoNothing();
 
     const Server = http.createServer(app);
     await new Promise<void>((resolve) => Server.listen(0, "127.0.0.1", resolve));
@@ -43,9 +49,23 @@ async function main() {
         assert.deepStrictEqual(UbEpicFriends.friends.map((Friend) => Friend.accountId), ["UE"]);
         assert.strictEqual(UbEpicFriends.friends[0].favorite, false);
         assert.strictEqual(UbEpicFriends.blockList.length, 0);
+        assert.deepStrictEqual(Object.keys(UbEpicFriends).sort(), ["blockList", "friends"]);
+        assert.strictEqual(UbEpicFriends.friends[0].displayName, "UE");
+        assert.deepStrictEqual(Object.keys(UbEpicFriends.friends[0]).sort(), ["accountId", "created", "displayName", "favorite"]);
 
         const UeEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/UE`, UeToken);
         assert.deepStrictEqual(UeEpicFriends.friends.map((Friend) => Friend.accountId), ["UB"]);
+
+        const SdkAccounts = await getJson<Array<Record<string, any>>>(`${BaseUrl}/epic/id/v2/sdk/accounts?accountId=UB&accountId=UE`, UbToken);
+        assert.strictEqual(SdkAccounts.length, 2);
+        for(const Account of SdkAccounts){
+            assert.deepStrictEqual(Object.keys(Account).sort(), ["accountId", "country", "displayName", "id", "linkedAccounts", "name", "preferredLanguage", "username"]);
+            assert(Account.displayName.length > 0);
+            assert(Array.isArray(Account.linkedAccounts));
+            for(const LinkedAccount of Account.linkedAccounts){
+                assert.deepStrictEqual(Object.keys(LinkedAccount).sort(), ["accountId", "displayName", "identityProviderId"]);
+            }
+        }
 
         const MismatchedEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/eos-route-account`, UbToken);
         assert.deepStrictEqual(MismatchedEpicFriends.friends.map((Friend) => Friend.accountId), ["UE"]);
@@ -66,16 +86,15 @@ async function main() {
         const LegacyFriends = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/UB/friends`, UbToken);
         assert.strictEqual(LegacyFriends.length, 1);
         assert.strictEqual(LegacyFriends[0].accountId, "UE");
-        assert.strictEqual(LegacyFriends[0].online, true);
-        assert.strictEqual(LegacyFriends[0].IsOnline, true);
-        assert.strictEqual(LegacyFriends[0].State, 0);
-        assert.strictEqual(LegacyFriends[0].StatusStr, "Online");
+        assert.strictEqual(LegacyFriends[0].IsOnline, false);
+        assert.strictEqual(LegacyFriends[0].State, 1);
+        assert.strictEqual(LegacyFriends[0].StatusStr, "Offline");
         assert.strictEqual(LegacyFriends[0].AppId, "Jackal");
         assert.strictEqual(LegacyFriends[0].PlatformString, "WIN");
 
         const MismatchedLegacyFriends = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/XQBF5VHGFJHR5AUILEPYI55MUQ/friends`, UbToken);
         assert.deepStrictEqual(MismatchedLegacyFriends.map((Friend) => Friend.accountId), ["UE"]);
-        assert(MismatchedLegacyFriends.every((Friend) => Friend.online === true));
+        assert(MismatchedLegacyFriends.every((Friend) => Friend.IsOnline === false));
 
         await patchJson(`${BaseUrl}/epic/presence/v1/53565ba467df4edbb6f5a3d939a8b4f2/UE/presence/test-conn`, UeToken, {
             status: "online",
@@ -93,9 +112,8 @@ async function main() {
         });
 
         const LegacyFriendsWithPresence = await getJson<Array<Record<string, any>>>(`${BaseUrl}/friends/api/v1/UB/friends`, UbToken);
-        assert.strictEqual(LegacyFriendsWithPresence[0].richPresence, "Dauntless - In the city");
-        assert.strictEqual(LegacyFriendsWithPresence[0].presence.source, undefined);
-        assert.strictEqual(LegacyFriendsWithPresence[0].presence.richPresence, "Dauntless - In the city");
+        assert.strictEqual(LegacyFriendsWithPresence[0].StatusStr, "Dauntless - In the city");
+        assert.strictEqual(LegacyFriendsWithPresence[0].presence, undefined);
     } finally {
         await new Promise<void>((resolve) => Server.close(() => resolve()));
     }

@@ -50,6 +50,7 @@ type RoutedRoomMessage = {
 type RoutedPrivateMessage = {
     fromUserId: string;
     fromDisplayName: string;
+    fromJid: string;
     toKey: string;
     body: string;
     id?: string;
@@ -483,7 +484,8 @@ function handleIq(session: XmppSession, node: XmppNode) {
 }
 
 async function sendRoster(session: XmppSession, id: string | undefined) {
-    const Items = await Promise.all(GetConfiguredRosterFriendIds(session.userId).map(async (FriendUserId) => {
+    const FriendUserIds = await GetConfiguredRosterFriendIds(session.userId);
+    const Items = await Promise.all(FriendUserIds.map(async (FriendUserId) => {
         const Presence = await BuildPresenceResult(FriendUserId);
         const DisplayName = String(Presence.payload.displayName ?? FriendUserId);
 
@@ -503,16 +505,16 @@ async function sendRoster(session: XmppSession, id: string | undefined) {
     LogProtocol("xmpp", "roster.response", {
         userId: session.userId,
         fullJid: session.fullJid,
-        friendUserIds: GetConfiguredRosterFriendIds(session.userId)
+        friendUserIds: FriendUserIds
     });
 
-    for (const FriendUserId of GetConfiguredRosterFriendIds(session.userId)) {
+    for (const FriendUserId of FriendUserIds) {
         await sendFriendPresence(session, FriendUserId);
     }
 }
 
 async function BroadcastFriendPresence(friendUserId: string) {
-    const ConfiguredFriends = GetSocialFriendUserIds();
+    const ConfiguredFriends = await GetSocialFriendUserIds();
     if (!ConfiguredFriends.includes(friendUserId)) {
         return;
     }
@@ -528,10 +530,9 @@ async function BroadcastFriendPresence(friendUserId: string) {
 
 async function sendFriendPresence(session: XmppSession, friendUserId: string) {
     const Presence = await BuildPresenceResult(friendUserId);
-    const PresenceProperties = Presence.payload.properties as Record<string, unknown>;
     const From = fullPresenceJidForUserId(friendUserId);
 
-    if (!Presence.payload.online) {
+    if (!Presence.payload.IsOnline) {
         send(session, `<presence xmlns="jabber:client" type="unavailable" from="${escapeXml(From)}" to="${escapeXml(session.fullJid)}"/>`);
         return;
     }
@@ -545,16 +546,10 @@ async function sendFriendPresence(session: XmppSession, friendUserId: string) {
         IsJoinable: Presence.payload.IsJoinable,
         AppId: Presence.payload.AppId,
         PlatformString: Presence.payload.PlatformString,
-        bIsPlaying: Presence.payload.bIsPlaying,
-        bIsJoinable: Presence.payload.bIsJoinable,
-        bHasVoiceSupport: Presence.payload.bHasVoiceSupport,
-        SessionId: PresenceProperties.SessionId ?? PresenceProperties.sessionId ?? "",
-        ProductName: Presence.payload.productName,
-        RichPresence: Presence.payload.richPresence,
+        RichPresence: Presence.payload.StatusStr,
         Properties: {
-            ...PresenceProperties,
             Status: Presence.payload.StatusStr,
-            RichPresence_s: Presence.payload.richPresence,
+            RichPresence_s: Presence.payload.StatusStr,
             AppId: Presence.payload.AppId,
             PlatformString: Presence.payload.PlatformString,
             State: Presence.payload.State,
@@ -573,14 +568,14 @@ async function sendFriendPresence(session: XmppSession, friendUserId: string) {
         friendUserId,
         from: From,
         to: session.fullJid,
-        online: Presence.payload.online,
+        online: Presence.payload.IsOnline,
         state: Presence.payload.State,
         status: Presence.payload.StatusStr
     });
 }
 
-function GetConfiguredRosterFriendIds(userId: string) {
-    return GetSocialFriendUserIds().filter((FriendUserId) => FriendUserId !== userId);
+async function GetConfiguredRosterFriendIds(userId: string) {
+    return (await GetSocialFriendUserIds()).filter((FriendUserId) => FriendUserId !== userId);
 }
 
 function fullPresenceJidForUserId(userId: string) {
@@ -804,6 +799,7 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
     const Message: RoutedPrivateMessage = {
         fromUserId: session.userId,
         fromDisplayName: session.displayName,
+        fromJid: session.fullJid,
         toKey: ToKey,
         body,
         id: node.attrs.id
@@ -824,6 +820,12 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
             toRaw: To,
             normalizedKeys: [...ToKeys]
         }, "XMPP private chat unresolved recipient");
+        send(session, [
+            `<message xmlns="jabber:client" type="error"${attr("id", node.attrs.id)} from="${escapeXml(To)}" to="${escapeXml(session.fullJid)}">`,
+            `<error type="cancel"><item-not-found xmlns="urn:ietf:params:xml:ns:xmpp-stanzas"/></error>`,
+            `</message>`
+        ].join(""));
+        return;
     }
 
     for (const Recipient of Recipients) {
@@ -861,7 +863,7 @@ function sendRoomOccupantUnavailable(recipient: XmppSession, room: string, occup
 
 function sendPrivateMessage(session: XmppSession, message: RoutedPrivateMessage, to: string) {
     send(session, [
-        `<message xmlns="jabber:client" type="chat"${attr("id", message.id)} from="${escapeXml(toBareJid(message.fromUserId))}" to="${escapeXml(to)}">`,
+        `<message xmlns="jabber:client" type="chat"${attr("id", message.id)} from="${escapeXml(message.fromJid)}" to="${escapeXml(to)}">`,
         `<body>${escapeXml(message.body)}</body>`,
         `</message>`
     ].join(""));

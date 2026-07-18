@@ -184,15 +184,18 @@ export async function UpdatePlayerMatchmakingActivity(UserId: string, Activity: 
 export async function GetRecentPlayerData(){
     let PlayerDataToReturn: PlayerData[] = [];
     const RecentPlayerIds = new Set<string>();
+    const KnownUserIds = new Set(
+        (await GetDb().select({ userId: users.userId }).from(users)).map((User) => User.userId)
+    );
 
     PlayerActivityMap.forEach((value, key, map) => {
-        if(Date.now() - value.LastUpdatedTime <= 90 * 1000){ // If entry is < 90s old
+        if(KnownUserIds.has(key) && Date.now() - value.LastUpdatedTime <= 90 * 1000){ // If entry is < 90s old
             RecentPlayerIds.add(key);
         }
     });
 
     PlayerMatchmakingActivityMap.forEach((value, key, map) => {
-        if(Date.now() - value.UpdatedTime <= 5 * 60 * 1000){
+        if(KnownUserIds.has(key) && Date.now() - value.UpdatedTime <= 5 * 60 * 1000){
             RecentPlayerIds.add(key);
         }
     });

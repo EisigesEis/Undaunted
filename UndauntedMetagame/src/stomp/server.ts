@@ -341,7 +341,7 @@ async function SendInitialPresenceSnapshots(session: StompSession, subscription:
 
     const UserIds = [
         session.userId,
-        ...GetSocialFriendUserIds().filter((UserId) => UserId !== session.userId)
+        ...(await GetSocialFriendUserIds()).filter((UserId) => UserId !== session.userId)
     ];
 
     LogProtocol("stomp", "presence.initial_snapshots", {

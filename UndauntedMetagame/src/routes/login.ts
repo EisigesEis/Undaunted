@@ -9,6 +9,7 @@ import { BuildCanonicalAccountIdentity } from "../controllers/accountProfile";
 import { BuildLegacyArchonAccountData, BuildLegacyArchonFriendsSave } from "../controllers/friends";
 import { ClearPlayerPartyForFreshLogin } from "../controllers/party";
 import { CancelNonReadyMatchmakingForFreshLogin } from "../controllers/matchmaking";
+import { GetUserIDForAPIKey, SignMetagameJWTForUid } from "../controllers/auth";
 
 export const loginRouter = Router();
 
@@ -34,6 +35,30 @@ loginRouter.get("/account/link/epic/:AccId", (req, res) => {
         "payload" : {
            "isLinked" : true
         }
+    });
+});
+
+// The game exchanges the launcher API key for its session token here.
+loginRouter.post("/game/login", async (req, res) => {
+    const Password = req.body?.password;
+    if(typeof Password !== "string" || Password.length === 0){
+        logger.warn("Phoenix bootstrap login request had no API key");
+        res.status(400).json({ error: "invalid_credentials" });
+        return;
+    }
+
+    const UserId = await GetUserIDForAPIKey(Password);
+    if(UserId == undefined){
+        logger.warn("Phoenix bootstrap login request had an invalid API key");
+        res.status(401).json({ error: "invalid_credentials" });
+        return;
+    }
+
+    const DisplayName = await GetDisplayUsernameForUserId(UserId);
+    res.json({
+        displayName: DisplayName,
+        accountId: UserId,
+        token: SignMetagameJWTForUid(UserId)
     });
 });
 
@@ -120,18 +145,14 @@ loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) =
 
     const Token = AuthHeader.slice("bearer ".length);
 
-    // A note on auth tokens:
-    // The original flow went Epic Launcher -> Epic -> PHX
-    // With each step having it's own auth token.
-    // Since this is unneeded complexity for us, we just use the same token for all 3
-    // Hence this echo endpoint
+    // We reuse the launcher token for the game session.
 
     res.json({
         "code": null,
         "message": "OK",
         "payload": {
             "error_code": null,
-            "sessionid": "SESSION_ID_LOL", // TODO: This is surfaced in the UI, but I don't think it matters for anything else
+            "sessionid": `undaunted-${req.AuthData.userId}`,
             "sessionToken": Token 
         }
     })
@@ -146,7 +167,7 @@ loginRouter.post("/accountinfo/public", HasUndauntedMetagameAuth, async (req: an
     const LegacyData = await BuildLegacyArchonAccountData(Identity.accountId, AdditionalSelfIds);
     const FriendsSave = await BuildLegacyArchonFriendsSave(Identity.accountId, AdditionalSelfIds);
 
-    // We allow anybody to look up anybody's username from account id
+    // Account names are public on this server.
 
     res.status(200);
     res.json({
