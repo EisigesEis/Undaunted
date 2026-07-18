@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { GetDb } from "../db";
 import { users } from "../db/schema";
 import { GetRememberedUsernameForUserId } from "./login";
@@ -48,6 +48,26 @@ export async function GetCanonicalDisplayNameForAccountId(accountId: string) {
 
     const RememberedName = NormalizeDisplayName(GetRememberedUsernameForUserId(accountId));
     return RememberedName ?? accountId;
+}
+
+export async function DoesCanonicalAccountExist(accountId: string) {
+    return await GetDb().query.users.findFirst({
+        columns: { userId: true },
+        where: eq(users.userId, accountId)
+    }) != undefined;
+}
+
+export async function FindCanonicalAccountIdByDisplayName(displayName: string) {
+    const NormalizedName = NormalizeDisplayName(displayName);
+    if (NormalizedName == undefined) {
+        return undefined;
+    }
+
+    const User = await GetDb().query.users.findFirst({
+        columns: { userId: true },
+        where: sql`lower(${users.name}) = lower(${NormalizedName})`
+    });
+    return User?.userId;
 }
 
 function NormalizeDisplayName(value: unknown) {

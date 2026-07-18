@@ -52,8 +52,16 @@ type RoutedPrivateMessage = {
     fromDisplayName: string;
     fromJid: string;
     toKey: string;
+    toRaw: string;
     body: string;
     id?: string;
+};
+
+type XmppTarget = {
+    accountNode: string;
+    accountKey: string;
+    domain?: string;
+    resource?: string;
 };
 
 type SessionIdentity = {
@@ -794,13 +802,15 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
         return;
     }
 
-    const ToKeys = recipientKeysForValue(To);
-    const ToKey = [...ToKeys][0] ?? normalizeUserKey(To);
+    const Target = parseXmppTarget(To);
+    const ToKeys = recipientKeysForValue(Target.accountNode);
+    const ToKey = Target.accountKey;
     const Message: RoutedPrivateMessage = {
         fromUserId: session.userId,
         fromDisplayName: session.displayName,
         fromJid: session.fullJid,
         toKey: ToKey,
+        toRaw: To,
         body,
         id: node.attrs.id
     };
@@ -809,6 +819,9 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
     LogProtocol("xmpp", "message.private.route", {
         senderUserId: session.userId,
         toRaw: To,
+        targetAccount: Target.accountNode,
+        targetDomain: Target.domain,
+        targetResource: Target.resource,
         normalizedKeys: [...ToKeys],
         bodyPreview: body.slice(0, 80),
         recipientCount: Recipients.size
@@ -818,6 +831,8 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
         logger.warn({
             senderUserId: session.userId,
             toRaw: To,
+            targetAccount: Target.accountNode,
+            targetDomain: Target.domain,
             normalizedKeys: [...ToKeys]
         }, "XMPP private chat unresolved recipient");
         send(session, [
@@ -830,6 +845,14 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
 
     for (const Recipient of Recipients) {
         sendPrivateMessage(Recipient, Message, Recipient.fullJid);
+    }
+
+    // RE: Client 1.4.4 correlates a pending DM with the exact `to` JID it
+    // sent. Echoing the recipient's canonical JID instead breaks that match,
+    // notably for local-domain targets such as user@127.0.0.1:9000.
+    const Recipient = [...Recipients][0];
+    if (Recipient != undefined) {
+        sendPrivateMessage(session, Message, Message.toRaw);
     }
 }
 
@@ -1112,6 +1135,23 @@ function escapeJidNode(node: string) {
 
 function normalizeUserKey(value: string) {
     return bareNode(value).trim().toLowerCase();
+}
+
+function parseXmppTarget(value: string): XmppTarget {
+    const Decoded = decodeXmppValue(value).trim();
+    const SlashIndex = Decoded.indexOf("/");
+    const Bare = SlashIndex >= 0 ? Decoded.slice(0, SlashIndex) : Decoded;
+    const Resource = SlashIndex >= 0 ? Decoded.slice(SlashIndex + 1) : undefined;
+    const AtIndex = Bare.indexOf("@");
+    const AccountNode = (AtIndex >= 0 ? Bare.slice(0, AtIndex) : Bare).trim();
+    const Domain = AtIndex >= 0 ? Bare.slice(AtIndex + 1).trim() : undefined;
+
+    return {
+        accountNode: AccountNode,
+        accountKey: normalizeUserKey(AccountNode),
+        domain: Domain && Domain.length > 0 ? Domain : undefined,
+        resource: Resource && Resource.length > 0 ? Resource : undefined
+    };
 }
 
 function recipientKeysForValue(value: string | undefined) {

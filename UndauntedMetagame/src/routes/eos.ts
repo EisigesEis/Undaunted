@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { logger } from "../logger";
 import { CreateEpicOAuthV2TokenResponseForUid, CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
-import { BuildExternalAuths, BuildPublicAccountPayload, BuildSdkAccountPayload, GetCanonicalDisplayNameForAccountId } from "../controllers/accountProfile";
+import { BuildExternalAuths, BuildPublicAccountPayload, BuildSdkAccountPayload, DoesCanonicalAccountExist, FindCanonicalAccountIdByDisplayName, GetCanonicalDisplayNameForAccountId } from "../controllers/accountProfile";
 
 export const eosRouter = Router();
 
@@ -174,16 +174,46 @@ eosRouter.get("/account/api/oauth/verify", (req, res) => {
     }
 });
 
+eosRouter.get("/account/api/public/account/displayName/:DisplayName", async (req, res) => {
+    const RawDisplayName = req.params.DisplayName;
+    let DisplayName: string;
+    try {
+        DisplayName = decodeURIComponent(RawDisplayName);
+    }
+    catch {
+        res.status(400).json({ errorCode: "errors.com.epicgames.account.invalid_display_name" });
+        return;
+    }
+
+    const AccountId = await FindCanonicalAccountIdByDisplayName(DisplayName);
+    logger.info({ rawDisplayName: RawDisplayName, displayName: DisplayName, accountId: AccountId }, "EOS account display-name lookup");
+    if (AccountId == undefined) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
+
+    res.json(await BuildPublicAccountPayload(AccountId));
+});
+
 eosRouter.get("/account/api/public/account/:AccId", async (req, res) => {
     const AccountId = req.params.AccId;
 
     logger.info(`EOS Account Info for ${AccountId}`);
+
+    if (!await DoesCanonicalAccountExist(AccountId)) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
 
     res.json(await BuildPublicAccountPayload(AccountId));
 });
 
 eosRouter.get("/account/api/public/account/:AccId/externalAuths", async (req, res) => {
     const AccountId = req.params.AccId;
+    if (!await DoesCanonicalAccountExist(AccountId)) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
     const DisplayName = await GetCanonicalDisplayNameForAccountId(AccountId);
 
     logger.info({
@@ -203,8 +233,11 @@ eosRouter.get("/epic/id/v2/sdk/accounts", async (req, res) => {
 
     logger.info(`EOS SDK account lookup for ${AccountIds.length} account(s)`);
 
-    const Accounts = await Promise.all(AccountIds
+    const ExistingAccountIds = (await Promise.all(AccountIds
         .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
+        .map(async (AccountId) => await DoesCanonicalAccountExist(AccountId) ? AccountId : undefined)))
+        .filter((AccountId): AccountId is string => AccountId != undefined);
+    const Accounts = await Promise.all(ExistingAccountIds
         .map((AccountId) => BuildSdkAccountPayload(AccountId)));
 
     res.json(Accounts);
@@ -232,9 +265,12 @@ eosRouter.get("/account/api/public/account", async (req: any, res) => {
     const AccountIds = ExtractAccountIds(req.query.accountId);
 
     if (AccountIds.length > 0) {
-        logger.info(`EOS public account query lookup for ${AccountIds.length} account(s)`);
-        const Accounts = await Promise.all(AccountIds.map((AccountId) => BuildPublicAccountPayload(AccountId)));
-        res.json(AccountIds.length === 1 ? Accounts[0] : Accounts);
+        const ExistingAccountIds = (await Promise.all(AccountIds.map(async (AccountId) =>
+            await DoesCanonicalAccountExist(AccountId) ? AccountId : undefined
+        ))).filter((AccountId): AccountId is string => AccountId != undefined);
+        const Accounts = await Promise.all(ExistingAccountIds.map((AccountId) => BuildPublicAccountPayload(AccountId)));
+        logger.info({ requestedAccountIds: AccountIds, resolvedAccountIds: ExistingAccountIds }, "EOS public bulk account lookup");
+        res.json(Accounts);
         return;
     }
 

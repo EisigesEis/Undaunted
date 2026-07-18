@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../selftests/testEnvironment";
 import assert from "assert";
 import http from "http";
 import WebSocket from "ws";
@@ -159,7 +159,27 @@ async function main() {
     const PrivateDelivery = await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "bob private delivery");
     assert(PrivateDelivery.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), "private delivery should identify the sender by full JID");
     assert(PrivateDelivery.includes(`to="bob@prod.ol.epicgames.com/${BobResource}"`), "private delivery should target the recipient full JID");
-    assert(!Alice.messages.some((Message) => Message.includes('id="private-1"') && Message.includes("Hello Bob")), "private message should not be echoed to sender when recipient is online");
+    const PrivateAcknowledgement = await Alice.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "alice private send acknowledgement");
+    assert(PrivateAcknowledgement.includes('to="bob@prod.ol.epicgames.com"'), "private acknowledgement should retain the raw recipient target");
+
+    const PrivateTargetCases = [
+        {id: "private-bare-account", target: "bob", body: "Bare account whisper"},
+        {id: "private-display-name", target: "Bob", body: "Display name whisper"},
+        {id: "private-prod-bare", target: "bob@prod.ol.epicgames.com", body: "Production bare whisper"},
+        {id: "private-prod-full", target: `bob@prod.ol.epicgames.com/${BobResource}`, body: "Production full whisper"},
+        {id: "private-local-server", target: "bob@127.0.0.1:9000", body: "Local server whisper"},
+        {id: "private-encoded-display", target: "Bob%20", body: "Encoded display whisper"}
+    ];
+
+    for(const TestCase of PrivateTargetCases){
+        Alice.ws.send(`<message type="chat" id="${TestCase.id}" to="${TestCase.target}"><body>${TestCase.body}</body></message>`);
+        const Delivered = await Bob.waitFor((Message) => Message.includes(`id="${TestCase.id}"`) && Message.includes(TestCase.body), `${TestCase.id} recipient delivery`);
+        assert(Delivered.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), `${TestCase.id} should identify Alice`);
+        assert(Delivered.includes(`to="bob@prod.ol.epicgames.com/${BobResource}"`), `${TestCase.id} should target Bob's bound JID`);
+        const Acknowledgement = await Alice.waitFor((Message) => Message.includes(`id="${TestCase.id}"`) && Message.includes(TestCase.body), `${TestCase.id} sender acknowledgement`);
+        assert(Acknowledgement.includes(`to="${TestCase.target}"`), `${TestCase.id} should preserve its raw target`);
+        assert(Acknowledgement.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), `${TestCase.id} acknowledgement should identify Alice`);
+    }
 
     Alice.ws.send(`<message type="chat" id="private-userid" to="bob"><body>Hello Bob by account</body></message>`);
     await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob by account"), "bob account id private delivery");

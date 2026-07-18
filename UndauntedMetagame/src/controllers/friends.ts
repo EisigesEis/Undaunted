@@ -4,6 +4,7 @@ import { users } from "../db/schema";
 import { GetRecentPlayerData } from "./undauntedapi";
 import { GetSocialPresenceState, IsSocialUserOnline } from "./social";
 import { BuildCanonicalAccountIdentity } from "./accountProfile";
+import { logger } from "../logger";
 
 /**
  * TODO:
@@ -34,6 +35,7 @@ export async function GetFriendForUser(_userId: string, friendId: string) {
 
 export async function BuildEpicFriendsPayload(userId: string, additionalSelfIds: string[] = []) {
     const FriendIds = await GetConfiguredFriendIdsForUser(userId, additionalSelfIds);
+    logger.debug({ userId, friendIds: FriendIds }, "Building Epic friends payload");
     return {
         friends: await Promise.all(FriendIds.map(BuildEpicFriendEntry)),
         blockList: BuildEpicBlockListPayload()
