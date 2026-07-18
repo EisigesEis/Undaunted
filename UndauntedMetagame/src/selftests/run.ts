@@ -52,6 +52,7 @@ async function main() {
             } catch (error) {
                 failedSuites.push(suite.name);
                 console.error(`${suite.name} selftest failed`);
+                console.error(error);
                 throw error;
             }
         }));

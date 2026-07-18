@@ -12,7 +12,6 @@ function color(color: string, values: unknown[]) {
     return `${color}${values.map(String).join(" ")}${Colors.reset}`;
 }
 
-// Keep selftest output scannable both when running one suite and when running all suites.
 const OriginalConsole = {log: console.log, warn: console.warn, error: console.error};
 console.log = (...values) => {
     const message = values.map(String).join(" ");
@@ -29,6 +28,7 @@ const TestKeys = generateKeyPairSync("rsa", {modulusLength: 2048});
 export function ResetTestEnvironment() {
     process.env.DB_FILENAME = ":memory:";
     process.env.PROTOCOL_FILE_LOG = "false";
+    process.env.INVENTORY_REMOVAL_BLOCK_REGEX = "^(QI_.*|CONTAINER_CORE_.*_CELLCORE)$";
     process.env.DEFAULT_USER_ID = "UB";
     process.env.LOCAL_USER_ID = "UB";
     process.env.SOCIAL_FRIEND_USER_IDS = "UB,UE";
