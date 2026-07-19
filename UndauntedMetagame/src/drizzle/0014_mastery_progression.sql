@@ -18,11 +18,3 @@ CREATE TABLE `progressionobjectives` (
 	`lastModifiedDate` text NOT NULL,
 	PRIMARY KEY(`userId`, `objectiveId`)
 );
---> statement-breakpoint
-CREATE TABLE `progressionreceipts` (
-	`userId` text NOT NULL,
-	`fingerprint` text NOT NULL,
-	`response` text NOT NULL,
-	`createdDate` text NOT NULL,
-	PRIMARY KEY(`userId`, `fingerprint`)
-);

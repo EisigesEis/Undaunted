@@ -126,13 +126,6 @@ export const progressionobjectives = sqliteTable("progressionobjectives", {
     lastModifiedDate: text("lastModifiedDate").notNull()
 }, (table) => ({ pk: primaryKey({ columns: [table.userId, table.objectiveId] }) }));
 
-export const progressionreceipts = sqliteTable("progressionreceipts", {
-    userId: text("userId").notNull(),
-    fingerprint: text("fingerprint").notNull(),
-    response: text("response").notNull(),
-    createdDate: text("createdDate").notNull()
-}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.fingerprint] }) }));
-
 export const cooldowns = sqliteTable("cooldowns", {
     userId: text("userId").notNull(),
     cooldownId: text("cooldownId").notNull(),

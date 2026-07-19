@@ -36,8 +36,7 @@ export async function runSelftest() {
     for (const configuredTrack of progressionConfig.payload.paths as { progression_id: string }[])
       assert.ok(returnedTrackIds.has(configuredTrack.progression_id));
     assert.ok(initialTracks.some((track: any) => track.progression_id === "MasteryTrack_Behemoth" && track.progress === 0));
-    // Player mastery starts at displayed level 1 without inventing one XP: its
-    // configured rank-1 threshold is zero. Other mastery tracks remain rank 0.
+    // Player level starts at rank 1 with zero XP
     assert.strictEqual(RankForTrackProgress("MasteryTrack_PlayerLevel", 0), 1);
     assert.strictEqual(RankForTrackProgress("MasteryTrack_Behemoth", 0), 0);
     for (const objectiveId of charroggObjectives) {
@@ -51,59 +50,194 @@ export async function runSelftest() {
 
     const first = {
       playerObjectives: [{ ObjectiveId: charroggObjectives[0], Value: 1, CompletedCount: 1 }],
-      ProgresstrackEvents: [{ Track: "MasteryTrack_Behemoth", Amount: 10 }]
+      ProgresstrackEvents: [
+        { Track: "MasteryTrack_PlayerLevel", Amount: 1 },
+        { Track: "MasteryTrack_Behemoth", Amount: 1 }
+      ]
     };
     const firstResponse = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(first) });
     assert.strictEqual(firstResponse.status, 200);
-    assert.deepStrictEqual(firstResponse.json.payload, {});
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 10);
+    assert.deepStrictEqual(firstResponse.json, {
+      code: null,
+      message: "OK",
+      payload: {
+        progress_tracks: [
+          { phx_account_id: "mastery-user", progression_id: "MasteryTrack_PlayerLevel", progress: 1, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null },
+          { phx_account_id: "mastery-user", progression_id: "MasteryTrack_Behemoth", progress: 1, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null }
+        ],
+        objectives: [{
+          phx_account_id: "mastery-user", objective_id: charroggObjectives[0], progress: 1, completed_count: 1,
+          created_date: firstResponse.json.payload.objectives[0].created_date,
+          last_modified_date: firstResponse.json.payload.objectives[0].last_modified_date
+        }]
+      }
+    });
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_PlayerLevel")).json.payload.progress, 1);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 1);
+    assert.strictEqual(RankForTrackProgress("MasteryTrack_PlayerLevel", 1), 2);
     const storedObjective = await request("mastery-user", `/progression/objectives/mastery-user/${charroggObjectives[0]}`);
     assert.strictEqual(storedObjective.json.payload.progress, 1);
     assert.strictEqual(storedObjective.json.payload.completed_count, 1);
 
-    // Identical legacy spam is acknowledged but cannot apply XP twice.
+    // Every accepted delta is a grant
     const replayedFirst = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(first) });
     assert.strictEqual(replayedFirst.status, 200);
-    assert.deepStrictEqual(replayedFirst.json.payload, {});
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 10);
+    assert.deepStrictEqual(replayedFirst.json.payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
+      ["MasteryTrack_PlayerLevel", 2],
+      ["MasteryTrack_Behemoth", 2]
+    ]);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_PlayerLevel")).json.payload.progress, 2);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 2);
 
     const higher = {
       playerObjectives: [{ ObjectiveId: charroggObjectives[0], Value: 5, CompletedCount: 2 }],
-      ProgresstrackEvents: [{ Track: "MasteryTrack_Behemoth", Amount: 10 }]
+      ProgresstrackEvents: [
+        { Track: "MasteryTrack_PlayerLevel", Amount: 1 },
+        { Track: "MasteryTrack_Behemoth", Amount: 1 }
+      ]
     };
     assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(higher) })).status, 200);
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 20);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_PlayerLevel")).json.payload.progress, 3);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 3);
     const allObjectives = await request("mastery-user", "/progression/objectives/mastery-user");
     assert.ok(Array.isArray(allObjectives.json.payload));
     assert.strictEqual(allObjectives.json.payload.find((entry: any) => entry.objective_id === charroggObjectives[0]).completed_count, 2);
     assert.strictEqual((await request("other-user", "/progression/objectives/mastery-user")).status, 403);
-    // The native endpoint historically acknowledges empty and not-yet-known
-    // wire shapes.  Returning 400 here suppresses its subsequent mastery flow.
+
+    // Identical grants both count
+    const hammerTrack = "MasteryTrack_Weapon_Hammer";
+    const progressOnly = { ProgressEvents: [{ Track: hammerTrack, Amount: 7 }] };
+    const progressOnlyResponse = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(progressOnly) });
+    assert.deepStrictEqual(progressOnlyResponse.json.payload, {
+      progress_tracks: [{ phx_account_id: "mastery-user", progression_id: hammerTrack, progress: 7, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null }],
+      objectives: []
+    });
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 7);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(progressOnly) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 14);
+
+    // Objectives can update without track XP
+    const objectiveOnlyId = "MasteryObjective_Test_ObjectiveOnly";
+    const objectiveOnly = { PlayerObjectives: [{ ObjectiveId: objectiveOnlyId, Value: 3, CompletedCount: 1 }] };
+    const objectiveOnlyResponse = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(objectiveOnly) });
+    assert.deepStrictEqual(objectiveOnlyResponse.json.payload, {
+      progress_tracks: [],
+      objectives: [{
+        phx_account_id: "mastery-user", objective_id: objectiveOnlyId, progress: 3, completed_count: 1,
+        created_date: objectiveOnlyResponse.json.payload.objectives[0].created_date,
+        last_modified_date: objectiveOnlyResponse.json.payload.objectives[0].last_modified_date
+      }]
+    });
+    assert.strictEqual((await request("mastery-user", `/progression/objectives/mastery-user/${objectiveOnlyId}`)).json.payload.progress, 3);
+
+    // Unchanged objectives must not block XP
+    const unchangedObjectiveWithEvent = {
+      PlayerObjectives: [{ ObjectiveId: objectiveOnlyId, Value: 3, CompletedCount: 1 }],
+      ProgressEvents: [{ Track: hammerTrack, Amount: 4 }]
+    };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(unchangedObjectiveWithEvent) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 18);
+
+    // Changed objectives make this a new grant
+    const changedObjectiveWithRepeatedEvent = {
+      PlayerObjectives: [{ ObjectiveId: objectiveOnlyId, Value: 4, CompletedCount: 2 }],
+      ProgressEvents: [{ Track: hammerTrack, Amount: 4 }]
+    };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(changedObjectiveWithRepeatedEvent) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 22);
+    assert.strictEqual((await request("mastery-user", `/progression/objectives/mastery-user/${objectiveOnlyId}`)).json.payload.progress, 4);
+
+    // Duplicate rows are merged before writing
+    const batchedTrack = "MasteryTrack_Weapon_Axe";
+    const batched = {
+      PlayerObjectives: [
+        { ObjectiveId: "MasteryObjective_Test_Batched", Value: 2, CompletedCount: 3 },
+        { ObjectiveId: "MasteryObjective_Test_Batched", Value: 7, CompletedCount: 1 }
+      ],
+      ProgressEvents: [
+        { Track: batchedTrack, Amount: 2 },
+        { Track: batchedTrack, Amount: 5 }
+      ]
+    };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(batched) })).status, 200);
+    const batchedObjective = (await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Test_Batched")).json.payload;
+    assert.strictEqual(batchedObjective.progress, 7);
+    assert.strictEqual(batchedObjective.completed_count, 3);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${batchedTrack}`)).json.payload.progress, 7);
+
+    const suffixedNative = {
+      playerObjectives_9_508B7A614866684F67DD7D831D92E669: [],
+      ProgresstrackEvents_12_B543EB8344EC249BE21E0489F54C8161: [{ Track: batchedTrack, Amount: 1 }]
+    };
+    const suffixedResponse = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(suffixedNative) });
+    assert.deepStrictEqual(suffixedResponse.json.payload, {
+      progress_tracks: [{ phx_account_id: "mastery-user", progression_id: batchedTrack, progress: 8, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null }],
+      objectives: []
+    });
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(batched) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${batchedTrack}`)).json.payload.progress, 15);
+
+    // Zero XP is a no-op
+    const zeroDelta = { ProgressEvents: [{ Track: batchedTrack, Amount: 0 }] };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(zeroDelta) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${batchedTrack}`)).json.payload.progress, 15);
+
+    // Confirmation works without receipt storage
+    const confirmation = await request("mastery-user", `/progression/mastery-user/${batchedTrack}/1/confirm/freemium`, { method: "POST" });
+    assert.strictEqual(confirmation.status, 200);
+    assert.strictEqual(confirmation.json.payload.confirmed_fremium_rank, 1);
+
+    // Snapshots never lower saved totals
+    const objectivesOnlySnapshot = { objectives: [{ objective_id: "MasteryObjective_Test_SnapshotObjective", value: 8, completed_count: 2 }], progress_tracks: [] };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(objectivesOnlySnapshot) })).status, 200);
+    assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Test_SnapshotObjective")).json.payload.progress, 8);
+    const tracksOnlySnapshot = { objectives: [], progress_tracks: [{ progression_id: hammerTrack, progress: 20 }] };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(tracksOnlySnapshot) })).status, 200);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 22);
+    const lowerSnapshot = { objectives: [{ objective_id: "MasteryObjective_Test_SnapshotObjective", value: 2, completed_count: 0 }], progress_tracks: [{ progression_id: hammerTrack, progress: 1 }] };
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(lowerSnapshot) })).status, 200);
+    assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Test_SnapshotObjective")).json.payload.progress, 8);
+    assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 22);
+
+    // Bad mastery values are rejected
+    for (const invalid of [
+      { ProgressEvents: [{ Track: hammerTrack, Amount: -1 }] },
+      { ProgressEvents: [{ Track: hammerTrack, Amount: 1.5 }] },
+      { PlayerObjectives: [{ ObjectiveId: "MasteryObjective_Test_Invalid", Value: Number.MAX_SAFE_INTEGER + 1, CompletedCount: 0 }] },
+      { objectives: [{ objective_id: "MasteryObjective_Test_Invalid", value: 1, completed_count: 0 }], progress_tracks: [{ progression_id: hammerTrack, progress: -1 }] }
+    ]) {
+      const invalidResponse = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(invalid) });
+      assert.strictEqual(invalidResponse.status, 400);
+    }
+
+    // Keep old handshake requests working
     for (const body of [{}, { nativeShapeStillUnderInvestigation: true }]) {
       const compatible = await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(body) });
       assert.strictEqual(compatible.status, 200);
       assert.deepStrictEqual(compatible.json, { code: null, message: "OK", payload: {} });
     }
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 20);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 3);
     const directGrant = await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth/10", { method: "POST" });
     assert.strictEqual(directGrant.status, 200);
-    assert.strictEqual(directGrant.json.payload.progress, 30);
+    assert.strictEqual(directGrant.json.payload.progress, 13);
 
-    // Native game servers authenticate with their API key and identify the
-    // affected player in the URL; they do not always forward a player bearer.
+    // Game servers may only send their API key
     const serverGrantResponse = await fetch(base + "/progression/mastery-user", {
       method: "POST",
       headers: { "x-undaunted-gameserver-apikey": gameserverKey, "Content-Type": "application/json" },
       body: JSON.stringify({
         PlayerObjectives: [{ ObjectiveId: charroggObjectives[1], Value: 1, CompletedCount: 0 }],
-        ProgressEvents: [{ Track: "MasteryTrack_Behemoth", Amount: 5 }]
+        ProgressEvents: [
+          { Track: "MasteryTrack_PlayerLevel", Amount: 1 },
+          { Track: "MasteryTrack_Behemoth", Amount: 5 }
+        ]
       })
     });
     assert.strictEqual(serverGrantResponse.status, 200);
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 35);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_PlayerLevel")).json.payload.progress, 4);
+    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 18);
 
-    // Exact captured GrantProgressionWithObjectives REST shape. Track progress
-    // is an absolute result, and the following GET must return the stored value.
+    // Captured REST snapshot shape
     const capturedSnapshot = {
       objectives: [{ objective_id: "MasteryObjective_Behemoth_Embermane_Kill", value: 1, completed_count: 1 }],
       progress_tracks: [
@@ -118,18 +252,24 @@ export async function runSelftest() {
     });
     assert.strictEqual(capturedResponse.status, 200);
     const capturedResponseBody = await capturedResponse.json() as any;
-    assert.deepStrictEqual(capturedResponseBody.payload, {});
+    assert.deepStrictEqual(capturedResponseBody.payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
+      ["MasteryTrack_PlayerLevel", 12],
+      ["MasteryTrack_Behemoth", 62]
+    ]);
     assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Behemoth_Embermane_Kill")).json.payload.progress, 1);
     assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 62);
     
-    // Replay snapshot should not trigger notifications
+    // Replaying a snapshot changes nothing
     const replayedSnapshot = await fetch(base + "/progression/mastery-user", {
       method: "POST",
       headers: { "x-undaunted-gameserver-apikey": gameserverKey, "Content-Type": "application/json" },
       body: JSON.stringify(capturedSnapshot)
     });
     assert.strictEqual(replayedSnapshot.status, 200);
-    assert.deepStrictEqual((await replayedSnapshot.json() as any).payload, {});
+    assert.deepStrictEqual((await replayedSnapshot.json() as any).payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
+      ["MasteryTrack_PlayerLevel", 12],
+      ["MasteryTrack_Behemoth", 62]
+    ]);
     assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 62);
 
   } finally {

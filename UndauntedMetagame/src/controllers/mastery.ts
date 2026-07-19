@@ -1,163 +1,153 @@
-import { and, eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { and, eq, sql } from "drizzle-orm";
 import { GetDb } from "../db";
-import { progressionobjectives, progressionreceipts, progressiontracks } from "../db/schema";
+import { progressionobjectives, progressiontracks } from "../db/schema";
 import progressionConfig from "../vendor/progression_config.json";
+
+type Track = typeof progressiontracks.$inferSelect;
+type Objective = typeof progressionobjectives.$inferSelect;
+type TrackWireRow = Pick<Track, "progressionId" | "progress" | "confirmedFreemiumRank" | "confirmedPremiumRank" | "confirmedDate">;
 
 const Now = () => new Date().toISOString();
 const ConfiguredPaths = progressionConfig.payload.paths as { progression_id: string; requirements?: { rank_id: number; xp_required: number }[] }[];
+const ConfiguredIds = ConfiguredPaths.map(({ progression_id }) => progression_id);
+const ConfiguredIdSet = new Set(ConfiguredIds);
+const RequirementsByTrack = new Map<string, { rank_id: number; xp_required: number }[]>();
+for (const path of ConfiguredPaths) if (!RequirementsByTrack.has(path.progression_id)) RequirementsByTrack.set(path.progression_id, path.requirements ?? []);
 const TrackKey = (userId: string, progressionId: string) => and(eq(progressiontracks.userId, userId), eq(progressiontracks.progressionId, progressionId));
 const ObjectiveKey = (userId: string, objectiveId: string) => and(eq(progressionobjectives.userId, userId), eq(progressionobjectives.objectiveId, objectiveId));
-
 export type MasteryObjectiveUpdate = { objectiveId: string; value: number; completedCount: number };
 export type MasteryTrackEvent = { track: string; amount: number };
 export type MasteryUpdate = { objectives: MasteryObjectiveUpdate[]; progressEvents: MasteryTrackEvent[] };
 export type MasteryTrackSnapshot = { track: string; progress: number };
 export type MasterySnapshot = { objectives: MasteryObjectiveUpdate[]; progressTracks: MasteryTrackSnapshot[] };
+export type MasteryApplyResult = { applied: boolean; duplicate: boolean };
+export type MasteryGrantResponse = {
+    progress_tracks: ReturnType<typeof TrackWire>[];
+    objectives: ReturnType<typeof ObjectiveWire>[];
+};
 
 export function Envelope(payload: unknown) { return { code: null, message: "OK", payload }; }
-export function TrackWire(userId: string, track: any) {
-    return { phx_account_id: userId, progression_id: track.progressionId, progress: track.progress, confirmed_fremium_rank: track.confirmedFreemiumRank, confirmed_premium_rank: track.confirmedPremiumRank, confirmed_date: track.confirmedDate };
+export function TrackWire(userId: string, track: TrackWireRow | undefined) {
+    const row = track as TrackWireRow;
+    return { phx_account_id: userId, progression_id: row.progressionId, progress: row.progress, confirmed_fremium_rank: row.confirmedFreemiumRank, confirmed_premium_rank: row.confirmedPremiumRank, confirmed_date: row.confirmedDate };
 }
-export function ZeroTrackWire(userId: string, progressionId: string) {
-    return { phx_account_id: userId, progression_id: progressionId, progress: 0, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null };
-}
-export function ConfiguredTrackIds() { return ConfiguredPaths.map((path) => path.progression_id); }
+export function ZeroTrackWire(userId: string, progressionId: string) { return { phx_account_id: userId, progression_id: progressionId, progress: 0, confirmed_fremium_rank: 0, confirmed_premium_rank: 0, confirmed_date: null }; }
+export function ConfiguredTrackIds() { return [...ConfiguredIds]; }
 export function RankForTrackProgress(progressionId: string, progress: number) {
-    const requirements = ConfiguredPaths.find((path) => path.progression_id === progressionId)?.requirements ?? [];
-    return requirements.reduce((rank, requirement) => progress >= requirement.xp_required ? Math.max(rank, requirement.rank_id) : rank, 0);
+    return (RequirementsByTrack.get(progressionId) ?? []).reduce((rank, requirement) => progress >= requirement.xp_required ? Math.max(rank, requirement.rank_id) : rank, 0);
 }
-export function ObjectiveWire(userId: string, objective: any) {
-    return { phx_account_id: userId, objective_id: objective.objectiveId, progress: objective.progress, completed_count: objective.completedCount, created_date: objective.createdDate, last_modified_date: objective.lastModifiedDate };
-}
-
-// Missing objectives start at zero.
-export function ZeroObjectiveWire(userId: string, objectiveId: string) {
-    const now = Now();
-    return { phx_account_id: userId, objective_id: objectiveId, progress: 0, completed_count: 0, created_date: now, last_modified_date: now };
-}
+export function ObjectiveWire(userId: string, objective: Objective) { return { phx_account_id: userId, objective_id: objective.objectiveId, progress: objective.progress, completed_count: objective.completedCount, created_date: objective.createdDate, last_modified_date: objective.lastModifiedDate }; }
+export function ZeroObjectiveWire(userId: string, objectiveId: string) { const now = Now(); return { phx_account_id: userId, objective_id: objectiveId, progress: 0, completed_count: 0, created_date: now, last_modified_date: now }; }
 
 export async function GetTracks(userId: string, progressionId?: string) {
-    const rows = progressionId ? await GetDb().query.progressiontracks.findMany({ where: TrackKey(userId, progressionId) }) : await GetDb().query.progressiontracks.findMany({ where: eq(progressiontracks.userId, userId) });
-    if (progressionId != undefined) return rows.length > 0 ? rows.map((row) => TrackWire(userId, row)) : [ZeroTrackWire(userId, progressionId)];
+    const db = GetDb();
+    const rows = progressionId ? await db.query.progressiontracks.findMany({ where: TrackKey(userId, progressionId) }) : await db.query.progressiontracks.findMany({ where: eq(progressiontracks.userId, userId) });
+    if (progressionId !== undefined) return rows.length ? rows.map((row) => TrackWire(userId, row)) : [ZeroTrackWire(userId, progressionId)];
 
-    // Fresh accounts still need every configured track at zero.
     const persisted = new Map(rows.map((row) => [row.progressionId, TrackWire(userId, row)]));
-    const configuredIds = ConfiguredTrackIds();
-    const configured = configuredIds.map((id) => persisted.get(id) ?? ZeroTrackWire(userId, id));
-    const additional = [...persisted.entries()].filter(([id]) => !configuredIds.includes(id)).map(([, track]) => track);
+    const configured = ConfiguredIds.map((id) => persisted.get(id) ?? ZeroTrackWire(userId, id));
+    const additional = [...persisted].filter(([id]) => !ConfiguredIdSet.has(id)).map(([, track]) => track);
     return [...configured, ...additional];
 }
 export async function GetObjectives(userId: string, objectiveId?: string) {
-    const rows = objectiveId ? await GetDb().query.progressionobjectives.findMany({ where: ObjectiveKey(userId, objectiveId) }) : await GetDb().query.progressionobjectives.findMany({ where: eq(progressionobjectives.userId, userId) });
+    const db = GetDb();
+    const rows = objectiveId ? await db.query.progressionobjectives.findMany({ where: ObjectiveKey(userId, objectiveId) }) : await db.query.progressionobjectives.findMany({ where: eq(progressionobjectives.userId, userId) });
     return rows.map((row) => ObjectiveWire(userId, row));
 }
+export async function GetMasteryGrantResponse(userId: string, trackIds: string[], objectiveIds: string[]): Promise<MasteryGrantResponse> {
+    const tracksById = new Map((await GetTracks(userId)).map((track) => [track.progression_id, track]));
+    const objectivesById = new Map((await GetObjectives(userId)).map((objective) => [objective.objective_id, objective]));
+    return {
+        progress_tracks: [...new Set(trackIds)].map((id) => tracksById.get(id)).filter((track) => track !== undefined),
+        objectives: [...new Set(objectiveIds)].map((id) => objectivesById.get(id)).filter((objective) => objective !== undefined)
+    };
+}
 export async function ApplyTrackGrant(userId: string, progressionId: string, amount: number) {
-    const existing = await GetDb().query.progressiontracks.findFirst({ where: TrackKey(userId, progressionId) });
-    const now = Now();
-    if (existing == undefined) await GetDb().insert(progressiontracks).values({ userId, progressionId, progress: Math.max(0, amount), lastModifiedDate: now });
-    else await GetDb().update(progressiontracks).set({ progress: Math.max(0, existing.progress + amount), lastModifiedDate: now }).where(TrackKey(userId, progressionId));
-    return (await GetTracks(userId, progressionId))[0];
+    const db = GetDb(); const existing = await db.query.progressiontracks.findFirst({ where: TrackKey(userId, progressionId) }); const now = Now();
+    const progress = Math.max(0, (existing?.progress ?? 0) + amount);
+    const track: TrackWireRow = existing ? { progressionId, progress, confirmedFreemiumRank: existing.confirmedFreemiumRank, confirmedPremiumRank: existing.confirmedPremiumRank, confirmedDate: existing.confirmedDate } : { progressionId, progress, confirmedFreemiumRank: 0, confirmedPremiumRank: 0, confirmedDate: null };
+    if (existing) await db.update(progressiontracks).set({ progress, lastModifiedDate: now }).where(TrackKey(userId, progressionId));
+    else await db.insert(progressiontracks).values({ userId, progressionId, progress, lastModifiedDate: now });
+    return TrackWire(userId, track);
 }
 export async function ConfirmTrack(userId: string, progressionId: string, rank: number, kind: string) {
-    const existing = await GetDb().query.progressiontracks.findFirst({ where: TrackKey(userId, progressionId) });
-    const now = Now(); const premium = kind.toLowerCase().includes("premium");
-    if (existing == undefined) await GetDb().insert(progressiontracks).values({ userId, progressionId, confirmedFreemiumRank: premium ? 0 : rank, confirmedPremiumRank: premium ? rank : 0, confirmedDate: now, lastModifiedDate: now });
-    else await GetDb().update(progressiontracks).set({ confirmedFreemiumRank: premium ? existing.confirmedFreemiumRank : Math.max(existing.confirmedFreemiumRank, rank), confirmedPremiumRank: premium ? Math.max(existing.confirmedPremiumRank, rank) : existing.confirmedPremiumRank, confirmedDate: now, lastModifiedDate: now }).where(TrackKey(userId, progressionId));
-    return (await GetTracks(userId, progressionId))[0];
+    const db = GetDb(); const existing = await db.query.progressiontracks.findFirst({ where: TrackKey(userId, progressionId) }); const now = Now(); const premium = kind.toLowerCase().includes("premium");
+    const confirmedFreemiumRank = premium ? existing?.confirmedFreemiumRank ?? 0 : Math.max(existing?.confirmedFreemiumRank ?? 0, rank);
+    const confirmedPremiumRank = premium ? Math.max(existing?.confirmedPremiumRank ?? 0, rank) : existing?.confirmedPremiumRank ?? 0;
+    const track: TrackWireRow = { progressionId, progress: existing?.progress ?? 0, confirmedFreemiumRank, confirmedPremiumRank, confirmedDate: now };
+    if (existing) await db.update(progressiontracks).set({ confirmedFreemiumRank, confirmedPremiumRank, confirmedDate: now, lastModifiedDate: now }).where(TrackKey(userId, progressionId));
+    else await db.insert(progressiontracks).values({ userId, progressionId, confirmedFreemiumRank, confirmedPremiumRank, confirmedDate: now, lastModifiedDate: now });
+    return TrackWire(userId, track);
 }
 export async function ApplyObjective(userId: string, objectiveId: string, progress: number, completedCount = 0) {
-    const existing = await GetDb().query.progressionobjectives.findFirst({ where: ObjectiveKey(userId, objectiveId) }); const now = Now();
-    if (existing == undefined) await GetDb().insert(progressionobjectives).values({ userId, objectiveId, progress: Math.max(0, progress), completedCount: Math.max(0, completedCount), createdDate: now, lastModifiedDate: now });
-    else await GetDb().update(progressionobjectives).set({ progress: Math.max(existing.progress, progress), completedCount: Math.max(existing.completedCount, completedCount), lastModifiedDate: now }).where(ObjectiveKey(userId, objectiveId));
-    return (await GetObjectives(userId, objectiveId))[0];
+    const db = GetDb(); const existing = await db.query.progressionobjectives.findFirst({ where: ObjectiveKey(userId, objectiveId) }); const now = Now();
+    const storedProgress = Math.max(existing?.progress ?? 0, progress); const storedCompletedCount = Math.max(existing?.completedCount ?? 0, completedCount);
+    const objective: Objective = existing ? { ...existing, progress: storedProgress, completedCount: storedCompletedCount, lastModifiedDate: now } : { userId, objectiveId, progress: storedProgress, completedCount: storedCompletedCount, createdDate: now, lastModifiedDate: now };
+    if (existing) await db.update(progressionobjectives).set({ progress: storedProgress, completedCount: storedCompletedCount, lastModifiedDate: now }).where(ObjectiveKey(userId, objectiveId));
+    else await db.insert(progressionobjectives).values(objective);
+    return ObjectiveWire(userId, objective);
 }
 
-// Apply XP only when an objective moves forward, so retries are safe.
+function ApplyObjectives(tx: any, userId: string, objectives: MasteryObjectiveUpdate[], now: string) {
+    const aggregated = new Map<string, MasteryObjectiveUpdate>();
+    for (const incoming of objectives) {
+        const current = aggregated.get(incoming.objectiveId);
+        aggregated.set(incoming.objectiveId, current ? {
+            objectiveId: incoming.objectiveId,
+            value: Math.max(current.value, incoming.value),
+            completedCount: Math.max(current.completedCount, incoming.completedCount)
+        } : incoming);
+    }
+    if (!aggregated.size) return;
+
+    tx.insert(progressionobjectives).values([...aggregated.values()].map((objective) => ({
+        userId, objectiveId: objective.objectiveId, progress: objective.value,
+        completedCount: objective.completedCount, createdDate: now, lastModifiedDate: now
+    }))).onConflictDoUpdate({
+        target: [progressionobjectives.userId, progressionobjectives.objectiveId],
+        set: {
+            progress: sql`max(${progressionobjectives.progress}, excluded.progress)`,
+            completedCount: sql`max(${progressionobjectives.completedCount}, excluded.completedCount)`,
+            lastModifiedDate: now
+        },
+        setWhere: sql`excluded.progress > ${progressionobjectives.progress} OR excluded.completedCount > ${progressionobjectives.completedCount}`
+    }).run();
+}
+
+function ApplyTracks(tx: any, userId: string, tracks: { track: string; value: number }[], now: string, delta: boolean) {
+    const aggregated = new Map<string, number>();
+    for (const incoming of tracks) aggregated.set(incoming.track, delta
+        ? (aggregated.get(incoming.track) ?? 0) + incoming.value
+        : Math.max(aggregated.get(incoming.track) ?? 0, incoming.value));
+    if (!aggregated.size) return;
+    tx.insert(progressiontracks).values([...aggregated].map(([progressionId, progress]) => ({
+        userId, progressionId, progress, lastModifiedDate: now
+    }))).onConflictDoUpdate({
+        target: [progressiontracks.userId, progressiontracks.progressionId],
+        set: {
+            progress: delta ? sql`${progressiontracks.progress} + excluded.progress` : sql`max(${progressiontracks.progress}, excluded.progress)`,
+            lastModifiedDate: now
+        },
+        setWhere: delta ? sql`excluded.progress != 0` : sql`excluded.progress > ${progressiontracks.progress}`
+    }).run();
+}
+
 export function ApplyMasteryUpdate(userId: string, update: MasteryUpdate) {
     return GetDb().transaction((tx) => {
         const now = Now();
-        const advanced: MasteryObjectiveUpdate[] = [];
-
-        for (const objective of update.objectives) {
-            const existing = tx.query.progressionobjectives.findFirst({ where: ObjectiveKey(userId, objective.objectiveId) }).sync();
-            const nextProgress = Math.max(0, objective.value);
-            const nextCompletedCount = Math.max(0, objective.completedCount);
-            if (existing != undefined && existing.progress >= nextProgress && existing.completedCount >= nextCompletedCount) continue;
-
-            if (existing == undefined) {
-                tx.insert(progressionobjectives).values({ userId, objectiveId: objective.objectiveId, progress: nextProgress, completedCount: nextCompletedCount, createdDate: now, lastModifiedDate: now }).run();
-            } else {
-                tx.update(progressionobjectives).set({ progress: Math.max(existing.progress, nextProgress), completedCount: Math.max(existing.completedCount, nextCompletedCount), lastModifiedDate: now }).where(ObjectiveKey(userId, objective.objectiveId)).run();
-            }
-            advanced.push(objective);
-        }
-
-        if (advanced.length === 0) return { advanced: false, advancedObjectiveIds: [] as string[], appliedTracks: [] as string[] };
-
-        const fingerprint = createHash("sha256").update(JSON.stringify({ objectives: advanced, progressEvents: update.progressEvents })).digest("hex");
-        const prior = tx.query.progressionreceipts.findFirst({ where: and(eq(progressionreceipts.userId, userId), eq(progressionreceipts.fingerprint, fingerprint)) }).sync();
-        if (prior != undefined) return { advanced: false, advancedObjectiveIds: [] as string[], appliedTracks: [] as string[] };
-
-        const appliedTracks: string[] = [];
-        for (const event of update.progressEvents) {
-            const existing = tx.query.progressiontracks.findFirst({ where: TrackKey(userId, event.track) }).sync();
-            if (existing == undefined) tx.insert(progressiontracks).values({ userId, progressionId: event.track, progress: Math.max(0, event.amount), lastModifiedDate: now }).run();
-            else tx.update(progressiontracks).set({ progress: Math.max(0, existing.progress + event.amount), lastModifiedDate: now }).where(TrackKey(userId, event.track)).run();
-            appliedTracks.push(event.track);
-        }
-        tx.insert(progressionreceipts).values({ userId, fingerprint, response: JSON.stringify({ advanced, appliedTracks }), createdDate: now }).run();
-        return { advanced: true, advancedObjectiveIds: advanced.map((objective) => objective.objectiveId), appliedTracks };
+        ApplyObjectives(tx, userId, update.objectives, now);
+        ApplyTracks(tx, userId, update.progressEvents.map(({ track, amount }) => ({ track, value: amount })), now, true);
+        return { applied: true, duplicate: false } satisfies MasteryApplyResult;
     });
 }
 
-// Snapshots are totals. Never move saved progress backwards.
 export function ApplyMasterySnapshot(userId: string, snapshot: MasterySnapshot) {
     return GetDb().transaction((tx) => {
         const now = Now();
-        const advancedObjectiveIds: string[] = [];
-        const advancedTracks: string[] = [];
-
-        for (const objective of snapshot.objectives) {
-            const existing = tx.query.progressionobjectives.findFirst({ where: ObjectiveKey(userId, objective.objectiveId) }).sync();
-            const progress = Math.max(0, objective.value);
-            const completedCount = Math.max(0, objective.completedCount);
-            if (existing != undefined && existing.progress >= progress && existing.completedCount >= completedCount) continue;
-            if (existing == undefined) {
-                tx.insert(progressionobjectives).values({ userId, objectiveId: objective.objectiveId, progress, completedCount, createdDate: now, lastModifiedDate: now }).run();
-            } else {
-                tx.update(progressionobjectives).set({ progress: Math.max(existing.progress, progress), completedCount: Math.max(existing.completedCount, completedCount), lastModifiedDate: now }).where(ObjectiveKey(userId, objective.objectiveId)).run();
-            }
-            advancedObjectiveIds.push(objective.objectiveId);
-        }
-
-        for (const track of snapshot.progressTracks) {
-            const existing = tx.query.progressiontracks.findFirst({ where: TrackKey(userId, track.track) }).sync();
-            const progress = Math.max(0, track.progress);
-            if (existing != undefined && existing.progress >= progress) continue;
-            if (existing == undefined) {
-                tx.insert(progressiontracks).values({ userId, progressionId: track.track, progress, lastModifiedDate: now }).run();
-            } else {
-                tx.update(progressiontracks).set({ progress, lastModifiedDate: now }).where(TrackKey(userId, track.track)).run();
-            }
-            advancedTracks.push(track.track);
-        }
-
-        return {
-            advanced: advancedObjectiveIds.length > 0 || advancedTracks.length > 0,
-            advancedObjectives: advancedObjectiveIds.length,
-            advancedObjectiveIds,
-            appliedTracks: advancedTracks
-        };
+        ApplyObjectives(tx, userId, snapshot.objectives, now);
+        ApplyTracks(tx, userId, snapshot.progressTracks.map(({ track, progress }) => ({ track, value: progress })), now, false);
+        return { applied: true, duplicate: false } satisfies MasteryApplyResult;
     });
 }
 
 export async function DeleteTrack(userId: string, progressionId: string) { await GetDb().delete(progressiontracks).where(TrackKey(userId, progressionId)); }
-export async function ReplayOrStore(userId: string, request: unknown, operation: () => Promise<unknown>) {
-    const fingerprint = createHash("sha256").update(JSON.stringify(request)).digest("hex");
-    const prior = await GetDb().query.progressionreceipts.findFirst({ where: and(eq(progressionreceipts.userId, userId), eq(progressionreceipts.fingerprint, fingerprint)) });
-    if (prior) return JSON.parse(prior.response);
-    const result = await operation();
-    await GetDb().insert(progressionreceipts).values({ userId, fingerprint, response: JSON.stringify(result), createdDate: Now() });
-    return result;
-}
