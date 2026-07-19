@@ -811,6 +811,12 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
     if (Globals::MetagameAddress.empty())
         return reinterpret_cast<bool(*)(void* a1, const wchar_t* Section, const wchar_t* Key, FString * Value, FString * Filename)>(OrigConfigCacheIniGetString)(a1, Section, Key, Value, Filename);
 
+    if (WideContainsInsensitive(Section, L"StompServiceMcp") &&
+        Key != nullptr && WideContainsInsensitive(Key, L"ServiceSessionEndpoint")) {
+        *Value = FString((L"ws://" + Globals::MetagameAddress + L"/ws/{accountid}").c_str());
+        return true;
+    }
+
     if (MayBeMappedEndpointKey(Key)) {
         EvalEndpointMap();
         const std::wstring KeyName(Key);
@@ -841,7 +847,14 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
         const bool IsStompSection = WideContainsInsensitive(Section, L"StompServiceMcp");
         const bool IsXmppSection = WideContainsInsensitive(Section, L"Xmpp");
 
-        if (WideContains(Key, L"protocol") || WideContains(Key, L"Protocol")) {
+        if (IsStompSection && (WideContainsInsensitive(Key, L"path") ||
+                               WideContainsInsensitive(Key, L"url") ||
+                               WideContainsInsensitive(Key, L"endpoint"))) {
+            *Value = FString(L"/stomp");
+            return true;
+        }
+
+        if (WideContainsInsensitive(Key, L"protocol") || WideContainsInsensitive(Key, L"scheme")) {
             *Value = FString((IsStompSection || IsXmppSection) ? L"ws" : L"http");
 
             return true;
