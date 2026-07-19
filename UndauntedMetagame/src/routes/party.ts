@@ -4,6 +4,7 @@ import { logger } from "../logger";
 import {
     AcceptPartyInvite,
     CreatePartyInvite,
+    DeletePartyInvite,
     GetInvitesForPlayer,
     GetOrCreatePartyForPlayer,
     GetPartyForPlayer,
@@ -86,6 +87,15 @@ partyRouter.put("/party/invite/accept/:playerId", HasUndauntedMetagameAuth, asyn
         return;
     }
 
+    res.status(200).json({});
+});
+
+partyRouter.delete("/party/invite/:playerId", HasUndauntedMetagameAuth, (req: any, res) => {
+    const RecipientPlayerId = req.AuthData.userId;
+    const SendingPlayerId = req.params.playerId;
+    const Removed = DeletePartyInvite(RecipientPlayerId, SendingPlayerId);
+
+    logger.debug({ recipientPlayerId: RecipientPlayerId, sendingPlayerId: SendingPlayerId, removed: Removed }, "Party invite deleted");
     res.status(200).json({});
 });
 

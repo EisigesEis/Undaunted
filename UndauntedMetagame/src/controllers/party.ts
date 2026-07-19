@@ -28,9 +28,18 @@ export type PartyInvite = {
     sendingDisplayName: string | null;
     sendingPlatform: string;
     sendingPlayerId: string;
+    createdAt: number;
 };
 
-type PartyListener = (event: { partyId: string; removedPlayerIds: string[] }) => void;
+export type PartyEvent = {
+    partyId: string;
+    leaderPlayerId: string | null;
+    memberPlayerIds: string[];
+    removedPlayerIds: string[];
+    revision: number;
+};
+
+type PartyListener = (event: PartyEvent) => void;
 
 type SerializedPartyBase = {
     gauntletLevel: null;
@@ -62,6 +71,7 @@ export async function GetOrCreatePartyForPlayer(playerId: string, buildId: strin
 
     const PartyId = CreatePartyId(buildId);
     const Now = Date.now();
+    const Member = await BuildPartyMember(playerId, Now);
     const Party: Party = {
         partyId: PartyId,
         buildId,
@@ -72,8 +82,8 @@ export async function GetOrCreatePartyForPlayer(playerId: string, buildId: strin
         serializedBase: undefined
     };
 
-    AttachMemberToParty(Party, await BuildPartyMember(playerId, Now), false);
     PartiesById.set(PartyId, Party);
+    AttachMemberToParty(Party, Member, false);
     logger.info({ playerId, partyId: PartyId, buildId }, "Created party");
 
     return Party;
@@ -82,9 +92,11 @@ export async function GetOrCreatePartyForPlayer(playerId: string, buildId: strin
 export function GetPartyForPlayer(playerId: string) {
     const PartyId = PartyIdByPlayerId.get(playerId);
     const IndexedParty = PartyId == undefined ? undefined : PartiesById.get(PartyId);
-    if (IndexedParty != undefined) {
+    if (IndexedParty?.members.has(playerId) === true) {
         return IndexedParty;
     }
+
+    PartyIdByPlayerId.delete(playerId);
 
     const ContainingParty = FindPartyContainingPlayer(playerId);
     if (ContainingParty == undefined) {
@@ -129,7 +141,8 @@ export async function CreatePartyInvite(senderPlayerId: string, recipientPlayerI
         recipientPlayerId,
         sendingDisplayName: await ResolveDisplayName(senderPlayerId),
         sendingPlatform: "win",
-        sendingPlayerId: senderPlayerId
+        sendingPlayerId: senderPlayerId,
+        createdAt: Date.now()
     };
 
     StoreInvite(Invite);
@@ -145,6 +158,29 @@ export function GetInvitesForPlayer(playerId: string) {
             sendingPlatform: Invite.sendingPlatform,
             sendingPlayerId: Invite.sendingPlayerId
         }));
+}
+
+export function DeletePartyInvite(recipientPlayerId: string, sendingPlayerId: string) {
+    return DeleteInvite(recipientPlayerId, sendingPlayerId);
+}
+
+// TODO: What is vanilly expired age?
+export function CleanupExpiredPartyInvites(now = Date.now(), maxAgeMs = 15 * 60 * 1000) {
+    let Removed = 0;
+    for (const [RecipientPlayerId, RecipientInvites] of InvitesByRecipient) {
+        for (const [SendingPlayerId, Invite] of RecipientInvites) {
+            if (now - Invite.createdAt > maxAgeMs) {
+                RecipientInvites.delete(SendingPlayerId);
+                Removed++;
+            }
+        }
+
+        if (RecipientInvites.size === 0) {
+            InvitesByRecipient.delete(RecipientPlayerId);
+        }
+    }
+
+    return Removed;
 }
 
 export async function AcceptPartyInvite(recipientPlayerId: string, sendingPlayerId: string) {
@@ -216,6 +252,7 @@ export function PromotePartyMember(requesterPlayerId: string, targetPlayerId: st
 
     Party.leaderPlayerId = targetPlayerId;
     MarkPartyChanged(Party);
+    EmitPartyEvent(Party, []);
     return { ok: true as const };
 }
 
@@ -305,7 +342,7 @@ function RemoveMemberFromParty(party: Party, playerId: string, requesterPlayerId
         }, "Removed party member");
     }
 
-    EmitPartyEvent(party.partyId, [playerId]);
+    EmitPartyEvent(party, [playerId]);
 }
 
 function AttachMemberToParty(party: Party, member: PartyMember, removeExistingMembership: boolean) {
@@ -316,10 +353,18 @@ function AttachMemberToParty(party: Party, member: PartyMember, removeExistingMe
     party.members.set(member.playerId, member);
     PartyIdByPlayerId.set(member.playerId, party.partyId);
     MarkPartyChanged(party);
+    EmitPartyEvent(party, []);
 }
 
 function OldestMember(party: Party) {
-    return [...party.members.values()].sort((A, B) => A.joinedAt - B.joinedAt)[0];
+    let Oldest: PartyMember | undefined;
+    for (const Member of party.members.values()) {
+        if (Oldest == undefined || Member.joinedAt < Oldest.joinedAt) {
+            Oldest = Member;
+        }
+    }
+
+    return Oldest!;
 }
 
 function FindPartyContainingPlayer(playerId: string) {
@@ -382,13 +427,15 @@ function StoreInvite(invite: PartyInvite) {
 function DeleteInvite(recipientPlayerId: string, sendingPlayerId: string) {
     const RecipientInvites = InvitesByRecipient.get(recipientPlayerId);
     if (RecipientInvites == undefined) {
-        return;
+        return false;
     }
 
-    RecipientInvites.delete(sendingPlayerId);
+    const Removed = RecipientInvites.delete(sendingPlayerId);
     if (RecipientInvites.size === 0) {
         InvitesByRecipient.delete(recipientPlayerId);
     }
+
+    return Removed;
 }
 
 function DeleteInvitesForPlayer(playerId: string) {
@@ -425,8 +472,16 @@ async function ResolveDisplayName(playerId: string) {
     }
 }
 
-function EmitPartyEvent(partyId: string, removedPlayerIds: string[]) {
+function EmitPartyEvent(party: Party, removedPlayerIds: string[]) {
+    const IsDissolved = !PartiesById.has(party.partyId);
+    const Event: PartyEvent = {
+        partyId: party.partyId,
+        leaderPlayerId: IsDissolved ? null : party.leaderPlayerId,
+        memberPlayerIds: IsDissolved ? [] : [...party.members.keys()],
+        removedPlayerIds,
+        revision: party.revision
+    };
     for (const Listener of Listeners) {
-        Listener({ partyId, removedPlayerIds });
+        Listener(Event);
     }
 }

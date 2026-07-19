@@ -153,6 +153,34 @@ export async function runSelftest() {
         const RepeatedPartyA = await postJson<PartyState>(`${BaseUrl}/party`, Token(A), PartyRequest());
         assert.deepStrictEqual(RepeatedPartyA, PartyA);
 
+        await invite(BaseUrl, Token(F), G);
+        await putJson(`${BaseUrl}/party/invite/accept/${F}`, Token(G), AcceptInviteRequest(F));
+        await invite(BaseUrl, Token(F), H);
+        await putJson(`${BaseUrl}/party/invite/accept/${F}`, Token(H), AcceptInviteRequest(F));
+        const OriginalPartyF = await postJson<PartyState>(`${BaseUrl}/party`, Token(F), PartyRequest());
+        assert.deepStrictEqual(OriginalPartyF.playerStates.map((State) => State.playerId), [F, G, H]);
+
+        await deleteJson(`${BaseUrl}/party/member`, Token(F));
+        const TransferredPartyG = await postJson<PartyState>(`${BaseUrl}/party`, Token(G), PartyRequest());
+        assert.strictEqual(TransferredPartyG.partyId, OriginalPartyF.partyId);
+        assert.strictEqual(TransferredPartyG.leaderPlayerId, G);
+        assert.deepStrictEqual(TransferredPartyG.playerStates.map((State) => State.playerId), [G, H]);
+
+        await invite(BaseUrl, Token(F), E);
+        const FreshPartyF = await postJson<PartyState>(`${BaseUrl}/party`, Token(F), PartyRequest());
+        assert.notStrictEqual(FreshPartyF.partyId, OriginalPartyF.partyId);
+        assert.strictEqual(FreshPartyF.leaderPlayerId, F);
+        assert.deepStrictEqual(FreshPartyF.playerStates.map((State) => State.playerId), [F]);
+        await putJson(`${BaseUrl}/party/invite/accept/${F}`, Token(E), AcceptInviteRequest(F));
+        const JoinedFreshPartyE = await postJson<PartyState>(`${BaseUrl}/party`, Token(E), PartyRequest());
+        assert.strictEqual(JoinedFreshPartyE.partyId, FreshPartyF.partyId);
+        assert.deepStrictEqual(JoinedFreshPartyE.playerStates.map((State) => State.playerId), [F, E]);
+
+        await deleteJson(`${BaseUrl}/party/member`, Token(F));
+        await deleteJson(`${BaseUrl}/party/member`, Token(E));
+        await deleteJson(`${BaseUrl}/party/member`, Token(G));
+        await deleteJson(`${BaseUrl}/party/member`, Token(H));
+
         await invite(BaseUrl, Token(A), B);
         const InvitesB = await getJson<{ invitations: any[] }>(`${BaseUrl}/party/invites`, Token(B));
         assert.strictEqual(InvitesB.invitations.length, 1);
@@ -166,6 +194,11 @@ export async function runSelftest() {
 
         const RepolledInvitesB = await getJson<{ invitations: any[] }>(`${BaseUrl}/party/invites`, Token(B));
         assert.deepStrictEqual(RepolledInvitesB, InvitesB);
+
+        await deleteJson(`${BaseUrl}/party/invite/${A}`, Token(B));
+        assert.deepStrictEqual((await getJson<{ invitations: any[] }>(`${BaseUrl}/party/invites`, Token(B))).invitations, []);
+        await deleteJson(`${BaseUrl}/party/invite/${A}`, Token(B));
+        await invite(BaseUrl, Token(A), B);
 
         await putJson(`${BaseUrl}/party/invite/accept/${A}`, Token(B), AcceptInviteRequest(A));
         const ClearedInvitesB = await getJson<{ invitations: any[] }>(`${BaseUrl}/party/invites`, Token(B));
