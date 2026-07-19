@@ -34,6 +34,11 @@ export async function runSelftest(){
     assert.deepStrictEqual(Result.success && Result.data?.removedInstancedItems[0], {
         catalogId: "PART_TEST", instanceId: "removable", updateVersion: 0
     });
+    assert.deepStrictEqual(Result.success && Result.data?.updatedStackedItems, [
+        {catalogId: "QI_DAMAGE_ENRAGEBONUS_POTION", quantity: 2},
+        {catalogId: "QI_DAMAGE_ENRAGEBONUS_POTION", quantity: 1},
+        {catalogId: "CELL_TEST", quantity: 0}
+    ]);
 
     const Row = await Db.query.inventory.findFirst();
     assert.deepStrictEqual(JSON.parse(Row!.instancedItems).map((Item: any) => Item.instanceId), ["protected"]);

@@ -308,6 +308,7 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             if(ShouldTouchStackedItems){
                 const StackedItems = Current.stackedItems;
                 const ItemByCatalogId = new Map<string, any>();
+                let DidUpdateStackedItems = false;
                 for(const Item of StackedItems){
                     if(!ItemByCatalogId.has(Item.catalogId)) ItemByCatalogId.set(Item.catalogId, Item);
                 }
@@ -323,11 +324,18 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                         StackedItems.push(ItemToAdd);
                         ItemByCatalogId.set(ItemToAdd.catalogId, ItemToAdd);
                     }
+                    DidUpdateStackedItems = true;
                 }
 
                 for(const ItemToRemove of StackedItemsToRemove){
                     const Existing = ItemByCatalogId.get(ItemToRemove.catalogId);
-                    if(!Existing || IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)) continue;
+                    if(!Existing) continue;
+                    if(IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)){
+                        TransactionData.updatedStackedItems.push(TransactionStackedItem(Existing), TransactionStackedItem({
+                            catalogId: Existing.catalogId, quantity: Existing.quantity > 0 ? Existing.quantity - 1 : 1
+                        }));
+                        continue;
+                    }
                     Existing.quantity -= Number(ItemToRemove.quantity ?? 0);
                     if(Existing.quantity <= 0){
                         const ItemIndex = StackedItems.indexOf(Existing);
@@ -336,9 +344,10 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
                         Existing.quantity = 0;
                     }
                     TransactionData.updatedStackedItems.push(TransactionStackedItem(Existing));
+                    DidUpdateStackedItems = true;
                 }
 
-                Update.stackedItems = JSON.stringify(StackedItems);
+                if(DidUpdateStackedItems) Update.stackedItems = JSON.stringify(StackedItems);
             }
 
             if(Object.keys(Update).length > 0){
