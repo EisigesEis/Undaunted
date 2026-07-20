@@ -7,11 +7,12 @@ import { GetDb } from "../db";
 import { gameserverapikeys, users } from "../db/schema";
 import { SignMetagameJWTForUid } from "../controllers/auth";
 import progressionConfig from "../vendor/progression_config.json";
-import { RankForTrackProgress } from "../controllers/mastery";
+import { ApplyMasterySnapshot, RankForTrackProgress } from "../controllers/mastery";
 
 export async function runSelftest() {
   await GetDb().insert(users).values([
     { userId: "mastery-user", name: "Mastery", notes: 0, isAdmin: false },
+    { userId: "captured-mastery-user", name: "Captured Mastery", notes: 0, isAdmin: false },
     { userId: "other-user", name: "Other", notes: 0, isAdmin: false }
   ]).onConflictDoNothing();
   const gameserverKey = "isolated-mastery-gameserver";
@@ -188,14 +189,14 @@ export async function runSelftest() {
     assert.strictEqual(confirmation.json.payload.confirmed_fremium_rank, 1);
 
     // Snapshots never lower saved totals
-    const objectivesOnlySnapshot = { objectives: [{ objective_id: "MasteryObjective_Test_SnapshotObjective", value: 8, completed_count: 2 }], progress_tracks: [] };
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(objectivesOnlySnapshot) })).status, 200);
+    const objectivesOnlySnapshot = { objectives: [{ objectiveId: "MasteryObjective_Test_SnapshotObjective", value: 8, completedCount: 2 }], progressTracks: [] };
+    ApplyMasterySnapshot("mastery-user", objectivesOnlySnapshot);
     assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Test_SnapshotObjective")).json.payload.progress, 8);
-    const tracksOnlySnapshot = { objectives: [], progress_tracks: [{ progression_id: hammerTrack, progress: 20 }] };
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(tracksOnlySnapshot) })).status, 200);
+    const tracksOnlySnapshot = { objectives: [], progressTracks: [{ track: hammerTrack, progress: 20 }] };
+    ApplyMasterySnapshot("mastery-user", tracksOnlySnapshot);
     assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 22);
-    const lowerSnapshot = { objectives: [{ objective_id: "MasteryObjective_Test_SnapshotObjective", value: 2, completed_count: 0 }], progress_tracks: [{ progression_id: hammerTrack, progress: 1 }] };
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user", { method: "POST", body: JSON.stringify(lowerSnapshot) })).status, 200);
+    const lowerSnapshot = { objectives: [{ objectiveId: "MasteryObjective_Test_SnapshotObjective", value: 2, completedCount: 0 }], progressTracks: [{ track: hammerTrack, progress: 1 }] };
+    ApplyMasterySnapshot("mastery-user", lowerSnapshot);
     assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Test_SnapshotObjective")).json.payload.progress, 8);
     assert.strictEqual((await request("mastery-user", `/progression/mastery-user/${hammerTrack}`)).json.payload.progress, 22);
 
@@ -237,40 +238,49 @@ export async function runSelftest() {
     assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_PlayerLevel")).json.payload.progress, 4);
     assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 18);
 
-    // Captured REST snapshot shape
-    const capturedSnapshot = {
-      objectives: [{ objective_id: "MasteryObjective_Behemoth_Embermane_Kill", value: 1, completed_count: 1 }],
+    // Captured snake-case requests carry track increments, including the initial grant from zero.
+    const capturedBootstrap = {
+      objectives: [{ objective_id: "MasteryObjective_Behemoth_Charrogg_Craft_Armor", value: 1, completed_count: 1 }],
       progress_tracks: [
-        { progression_id: "MasteryTrack_PlayerLevel", progress: 12 },
-        { progression_id: "MasteryTrack_Behemoth", progress: 62 }
+        { progression_id: "MasteryTrack_PlayerLevel", progress: 484 },
+        { progression_id: "MasteryTrack_Behemoth", progress: 63 },
+        { progression_id: "MasteryTrack_Weapon_Hammer", progress: 61 },
+        { progression_id: "MasteryTrack_Weapon_Axe", progress: 58 }
       ]
     };
-    const capturedResponse = await fetch(base + "/progression/mastery-user", {
+    const capturedResponse = await fetch(base + "/progression/captured-mastery-user", {
       method: "POST",
       headers: { "x-undaunted-gameserver-apikey": gameserverKey, "Content-Type": "application/json" },
-      body: JSON.stringify(capturedSnapshot)
+      body: JSON.stringify(capturedBootstrap)
     });
     assert.strictEqual(capturedResponse.status, 200);
     const capturedResponseBody = await capturedResponse.json() as any;
     assert.deepStrictEqual(capturedResponseBody.payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
-      ["MasteryTrack_PlayerLevel", 12],
-      ["MasteryTrack_Behemoth", 62]
+      ["MasteryTrack_PlayerLevel", 484],
+      ["MasteryTrack_Behemoth", 63],
+      ["MasteryTrack_Weapon_Hammer", 61],
+      ["MasteryTrack_Weapon_Axe", 58]
     ]);
-    assert.strictEqual((await request("mastery-user", "/progression/objectives/mastery-user/MasteryObjective_Behemoth_Embermane_Kill")).json.payload.progress, 1);
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 62);
-    
-    // Replaying a snapshot changes nothing
-    const replayedSnapshot = await fetch(base + "/progression/mastery-user", {
-      method: "POST",
-      headers: { "x-undaunted-gameserver-apikey": gameserverKey, "Content-Type": "application/json" },
-      body: JSON.stringify(capturedSnapshot)
-    });
-    assert.strictEqual(replayedSnapshot.status, 200);
-    assert.deepStrictEqual((await replayedSnapshot.json() as any).payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
-      ["MasteryTrack_PlayerLevel", 12],
-      ["MasteryTrack_Behemoth", 62]
+    assert.strictEqual((await request("captured-mastery-user", "/progression/objectives/captured-mastery-user/MasteryObjective_Behemoth_Charrogg_Craft_Armor")).json.payload.progress, 1);
+
+    // A later gameplay request adds its small values instead of treating them as totals.
+    const capturedGameplay = {
+      progress_tracks: [
+        { progression_id: "MasteryTrack_PlayerLevel", progress: 2 },
+        { progression_id: "MasteryTrack_Weapon_Hammer", progress: 1 },
+        { progression_id: "MasteryTrack_Behemoth", progress: 1 }
+      ],
+      objectives: [{ objective_id: "MasteryObjective_Behemoth_Quillshot_Kill", value: 1, completed_count: 1 }]
+    };
+    const gameplayResponse = await request("captured-mastery-user", "/progression/captured-mastery-user", { method: "POST", body: JSON.stringify(capturedGameplay) });
+    assert.deepStrictEqual(gameplayResponse.json.payload.progress_tracks.map((track: any) => [track.progression_id, track.progress]), [
+      ["MasteryTrack_PlayerLevel", 486],
+      ["MasteryTrack_Weapon_Hammer", 62],
+      ["MasteryTrack_Behemoth", 64]
     ]);
-    assert.strictEqual((await request("mastery-user", "/progression/mastery-user/MasteryTrack_Behemoth")).json.payload.progress, 62);
+    assert.strictEqual(gameplayResponse.json.payload.objectives[0].progress, 1);
+    assert.strictEqual(gameplayResponse.json.payload.objectives[0].completed_count, 1);
+    assert.strictEqual((await request("captured-mastery-user", "/progression/captured-mastery-user/MasteryTrack_Weapon_Axe")).json.payload.progress, 58);
 
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));

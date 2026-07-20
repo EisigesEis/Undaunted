@@ -3,7 +3,7 @@ import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth
 import { logger } from "../logger";
 import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, ProgressionError, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
 import progressionConfig from "../vendor/progression_config.json";
-import { ApplyMasterySnapshot, ApplyMasteryUpdate, ApplyTrackGrant, ConfiguredTrackIds, ConfirmTrack, DeleteTrack, Envelope, GetMasteryGrantResponse, GetObjectives, GetTracks, MasterySnapshot, MasteryTrackEvent, MasteryUpdate, TrackWire, ZeroObjectiveWire, ZeroTrackWire } from "../controllers/mastery";
+import { ApplyMasteryUpdate, ApplyTrackGrant, ConfiguredTrackIds, ConfirmTrack, DeleteTrack, Envelope, GetMasteryUpdateResponse, GetObjectives, GetTracks, MasteryTrackEvent, MasteryUpdate, TrackWire, ZeroObjectiveWire, ZeroTrackWire } from "../controllers/mastery";
 import { ACTIVE_HUNTPASS, ClaimHuntPass } from "../controllers/huntpass";
 
 export const progressionRouter = Router();
@@ -192,41 +192,33 @@ function FirstDefined(source: any, names: string[]) {
     return undefined;
 }
 
-type ParsedMasteryGrant = { kind: "events"; update: MasteryUpdate } | { kind: "snapshot"; update: MasterySnapshot };
-type MasteryParseResult = ParsedMasteryGrant | { kind: "invalid"; reason: string } | undefined;
+type ParsedMasteryUpdate = { kind: "events"; update: MasteryUpdate };
+type MasteryParseResult = ParsedMasteryUpdate | { kind: "invalid"; reason: string } | undefined;
 
 function ValidMasteryInteger(value: number) {
     return Number.isSafeInteger(value) && value >= 0;
 }
 
-function NativeField(source: any, names: string[]) {
-    const exact = FirstDefined(source, names);
-    if (exact !== undefined || source == null || typeof source !== "object") return exact;
-    const key = Object.keys(source).find((candidate) => names.some((name) => candidate.toLowerCase().startsWith(`${name.toLowerCase()}_`)));
-    return key === undefined ? undefined : source[key];
-}
-
-function NativeMasteryUpdate(body: any): MasteryParseResult {
+function ParseMasteryUpdate(body: any): MasteryParseResult {
     const source = body?.payload != undefined && typeof body.payload === "object" ? body.payload : body;
-    const hasSnapshotObjectives = source?.objectives !== undefined;
-    const hasSnapshotTracks = source?.progress_tracks !== undefined;
-    if (hasSnapshotObjectives || hasSnapshotTracks) {
-        if (!Array.isArray(source?.objectives) || !Array.isArray(source?.progress_tracks)) return { kind: "invalid", reason: "snapshot_objectives_and_progress_tracks_must_be_arrays" };
+    const isSnakeCasePayload = source?.objectives !== undefined || source?.progress_tracks !== undefined;
+    if (isSnakeCasePayload) {
+        if (!Array.isArray(source?.objectives) || !Array.isArray(source?.progress_tracks)) return { kind: "invalid", reason: "objectives_and_progress_tracks_must_be_arrays" };
         const objectives = source.objectives.map((entry: any) => ({
             objectiveId: entry?.objective_id,
             value: Number(entry?.value),
             completedCount: Number(entry?.completed_count ?? 0)
         }));
-        const progressTracks = source.progress_tracks.map((entry: any) => ({
+        const progressEvents: MasteryTrackEvent[] = source.progress_tracks.map((entry: any) => ({
             track: entry?.progression_id,
-            progress: Number(entry?.progress)
+            amount: Number(entry?.progress)
         }));
         if (objectives.some((entry: any) => typeof entry.objectiveId !== "string" || !entry.objectiveId || !ValidMasteryInteger(entry.value) || !ValidMasteryInteger(entry.completedCount)) ||
-            progressTracks.some((entry: any) => typeof entry.track !== "string" || !entry.track || !ValidMasteryInteger(entry.progress))) return { kind: "invalid", reason: "snapshot_values_must_be_non_negative_safe_integers" };
-        return { kind: "snapshot", update: { objectives, progressTracks } };
+            progressEvents.some((entry: any) => typeof entry.track !== "string" || !entry.track || !ValidMasteryInteger(entry.amount))) return { kind: "invalid", reason: "mastery_values_must_be_non_negative_safe_integers" };
+        return { kind: "events", update: { objectives, progressEvents } };
     }
-    const objectiveSource = NativeField(source, ["playerObjectives", "PlayerObjectives", "player_objectives"]);
-    const eventSource = NativeField(source, ["ProgresstrackEvents", "ProgressEvents", "progressEvents", "progress_track_events"]);
+    const objectiveSource = FirstDefined(source, ["playerObjectives", "PlayerObjectives", "player_objectives"]);
+    const eventSource = FirstDefined(source, ["ProgresstrackEvents", "ProgressEvents", "progressEvents", "progress_track_events"]);
     if (objectiveSource === undefined && eventSource === undefined) return undefined;
     if ((objectiveSource !== undefined && !Array.isArray(objectiveSource)) || (eventSource !== undefined && !Array.isArray(eventSource))) return { kind: "invalid", reason: "mastery_objectives_and_progress_events_must_be_arrays" };
 
@@ -247,24 +239,21 @@ function NativeMasteryUpdate(body: any): MasteryParseResult {
 progressionRouter.post("/progression/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
     if (!Owns(req, res)) return;
     const body = req.body ?? {};
-    const grant = NativeMasteryUpdate(body);
-    if (grant?.kind === "invalid") {
-        logger.warn({ userId: req.params.userId, reason: grant.reason }, "Invalid mastery progress rejected");
-        res.status(400).json({ code: "invalid_mastery_progress", message: grant.reason, payload: null });
+    const parsed = ParseMasteryUpdate(body);
+    if (parsed?.kind === "invalid") {
+        logger.warn({ userId: req.params.userId, reason: parsed.reason }, "Invalid mastery progress rejected");
+        res.status(400).json({ code: "invalid_mastery_progress", message: parsed.reason, payload: null });
         return;
     }
-    if (grant == undefined) {
+    if (parsed == undefined) {
         // Old servers also use this endpoint as a handshake
         res.status(200).json(Envelope({}));
         return;
     }
-    const trackIds = grant.kind === "snapshot"
-        ? grant.update.progressTracks.map(({ track }) => track)
-        : grant.update.progressEvents.map(({ track }) => track);
-    const objectiveIds = grant.update.objectives.map(({ objectiveId }) => objectiveId);
-    if (grant.kind === "snapshot") await ApplyMasterySnapshot(req.params.userId, grant.update);
-    else await ApplyMasteryUpdate(req.params.userId, grant.update);
-    res.status(200).json(Envelope(await GetMasteryGrantResponse(req.params.userId, trackIds, objectiveIds)));
+    const trackIds = parsed.update.progressEvents.map(({ track }) => track);
+    const objectiveIds = parsed.update.objectives.map(({ objectiveId }) => objectiveId);
+    ApplyMasteryUpdate(req.params.userId, parsed.update);
+    res.status(200).json(Envelope(await GetMasteryUpdateResponse(req.params.userId, trackIds, objectiveIds)));
 });
 
 progressionRouter.post("/progression/:userId/:progressionId/:amount", HasUndauntedMetagameAuth, async (req: any, res) => {

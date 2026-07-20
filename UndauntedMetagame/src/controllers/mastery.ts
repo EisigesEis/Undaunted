@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { GetDb } from "../db";
 import { progressionobjectives, progressiontracks } from "../db/schema";
 import progressionConfig from "../vendor/progression_config.json";
@@ -20,8 +20,7 @@ export type MasteryTrackEvent = { track: string; amount: number };
 export type MasteryUpdate = { objectives: MasteryObjectiveUpdate[]; progressEvents: MasteryTrackEvent[] };
 export type MasteryTrackSnapshot = { track: string; progress: number };
 export type MasterySnapshot = { objectives: MasteryObjectiveUpdate[]; progressTracks: MasteryTrackSnapshot[] };
-export type MasteryApplyResult = { applied: boolean; duplicate: boolean };
-export type MasteryGrantResponse = {
+type MasteryUpdateResponse = {
     progress_tracks: ReturnType<typeof TrackWire>[];
     objectives: ReturnType<typeof ObjectiveWire>[];
 };
@@ -54,12 +53,19 @@ export async function GetObjectives(userId: string, objectiveId?: string) {
     const rows = objectiveId ? await db.query.progressionobjectives.findMany({ where: ObjectiveKey(userId, objectiveId) }) : await db.query.progressionobjectives.findMany({ where: eq(progressionobjectives.userId, userId) });
     return rows.map((row) => ObjectiveWire(userId, row));
 }
-export async function GetMasteryGrantResponse(userId: string, trackIds: string[], objectiveIds: string[]): Promise<MasteryGrantResponse> {
-    const tracksById = new Map((await GetTracks(userId)).map((track) => [track.progression_id, track]));
-    const objectivesById = new Map((await GetObjectives(userId)).map((objective) => [objective.objective_id, objective]));
+export async function GetMasteryUpdateResponse(userId: string, trackIds: string[], objectiveIds: string[]): Promise<MasteryUpdateResponse> {
+    const uniqueTrackIds = [...new Set(trackIds)];
+    const uniqueObjectiveIds = [...new Set(objectiveIds)];
+    const db = GetDb();
+    const [tracks, objectives] = await Promise.all([
+        uniqueTrackIds.length ? db.select().from(progressiontracks).where(and(eq(progressiontracks.userId, userId), inArray(progressiontracks.progressionId, uniqueTrackIds))) : [],
+        uniqueObjectiveIds.length ? db.select().from(progressionobjectives).where(and(eq(progressionobjectives.userId, userId), inArray(progressionobjectives.objectiveId, uniqueObjectiveIds))) : []
+    ]);
+    const tracksById = new Map(tracks.map((track) => [track.progressionId, TrackWire(userId, track)]));
+    const objectivesById = new Map(objectives.map((objective) => [objective.objectiveId, ObjectiveWire(userId, objective)]));
     return {
-        progress_tracks: [...new Set(trackIds)].map((id) => tracksById.get(id)).filter((track) => track !== undefined),
-        objectives: [...new Set(objectiveIds)].map((id) => objectivesById.get(id)).filter((objective) => objective !== undefined)
+        progress_tracks: uniqueTrackIds.map((id) => tracksById.get(id)).filter((track) => track !== undefined),
+        objectives: uniqueObjectiveIds.map((id) => objectivesById.get(id)).filter((objective) => objective !== undefined)
     };
 }
 export async function ApplyTrackGrant(userId: string, progressionId: string, amount: number) {
@@ -137,7 +143,6 @@ export function ApplyMasteryUpdate(userId: string, update: MasteryUpdate) {
         const now = Now();
         ApplyObjectives(tx, userId, update.objectives, now);
         ApplyTracks(tx, userId, update.progressEvents.map(({ track, amount }) => ({ track, value: amount })), now, true);
-        return { applied: true, duplicate: false } satisfies MasteryApplyResult;
     });
 }
 
@@ -146,7 +151,6 @@ export function ApplyMasterySnapshot(userId: string, snapshot: MasterySnapshot) 
         const now = Now();
         ApplyObjectives(tx, userId, snapshot.objectives, now);
         ApplyTracks(tx, userId, snapshot.progressTracks.map(({ track, progress }) => ({ track, value: progress })), now, false);
-        return { applied: true, duplicate: false } satisfies MasteryApplyResult;
     });
 }
 
