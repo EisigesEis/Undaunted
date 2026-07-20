@@ -120,6 +120,7 @@ export function AttachXmppServer(server: http.Server, options: AttachXmppServerO
         ws.on("message", (data) => handleFrame(Session, data.toString()));
         ws.on("pong", () => {
             Session.lastActivityAt = Date.now();
+            TouchSocialSession(Session.socialSessionId);
         });
         ws.on("close", () => closeSession(Session));
         ws.on("error", (error) => logger.warn(error, `XMPP websocket error for ${Session.userId}`));

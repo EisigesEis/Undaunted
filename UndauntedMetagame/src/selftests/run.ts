@@ -12,6 +12,8 @@ const suites: Suite[] = [
     {name: "loadout", tables: {"*": "write"}, run: () => Run("./loadout")},
     {name: "mastery", tables: {"*": "write"}, run: () => Run("./mastery")},
     {name: "store", tables: {users: "write", characters: "write", inventories: "write", cooldowns: "write", entitlements: "write"}, run: () => Run("./store")},
+    // Social lease tests run lease sweeps with explicit timestamps, so keep isolated.
+    {name: "social", tables: {"*": "write"}, run: () => Run("./social")},
     {name: "huntpass", tables: {"*": "write"}, run: () => Run("./huntpass")},
     {name: "xmpp", tables: {users: "write"}, run: () => Run("../xmpp/selftest")},
     {name: "stomp", tables: {users: "write"}, run: () => Run("../stomp/selftest")},
