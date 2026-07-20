@@ -134,11 +134,17 @@ eosRouter.post("/account/api/oauth/token", async (req, res) => {
 async function ResolveOAuthUserId(value: unknown) {
     if (typeof value === "string" && value.length > 0) {
         const UserIdFromApiKey = await GetUserIDForAPIKey(value);
-        return UserIdFromApiKey ?? value;
+        if(UserIdFromApiKey != undefined){
+            return UserIdFromApiKey;
+        }
+
+        const IsDevBypassEnabled = process.env.AUTH_MODE === "NONE" && process.env.NODE_ENV !== "production";
+        if(IsDevBypassEnabled){
+            return value;
+        }
     }
 
-    const DefaultUserId = process.env.LOCAL_USER_ID ?? process.env.DEFAULT_USER_ID;
-    return typeof DefaultUserId === "string" && DefaultUserId.length > 0 ? DefaultUserId : undefined;
+    return undefined;
 }
 
 eosRouter.get("/account/api/oauth/verify", (req, res) => {

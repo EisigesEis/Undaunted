@@ -54,7 +54,16 @@ loginRouter.post("/game/login", async (req, res) => {
         return;
     }
 
-    const DisplayName = await GetDisplayUsernameForUserId(UserId);
+    let DisplayName: string;
+    try{
+        DisplayName = await GetDisplayUsernameForUserId(UserId);
+    }
+    catch (error) {
+        logger.error({ error, userId: UserId }, "Failed to resolve display name for game login user");
+        res.status(500).json({ error: "internal_error" });
+        return;
+    }
+
     res.json({
         displayName: DisplayName,
         accountId: UserId,
@@ -141,9 +150,12 @@ loginRouter.get("/tags", HasUndauntedMetagameAuth, (req: any, res) => {
 });
 
 loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) => {
-    const AuthHeader = req.headers.authorization;
-
-    const Token = AuthHeader.slice("bearer ".length);
+    const Token = GetBearerToken(req.headers.authorization);
+    if(Token == undefined){
+        res.status(401);
+        res.send();
+        return;
+    }
 
     // We reuse the launcher token for the game session.
 
@@ -157,6 +169,25 @@ loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) =
         }
     })
 });
+
+function GetBearerToken(authHeader: unknown) {
+    if(typeof authHeader !== "string"){
+        return undefined;
+    }
+
+    const SpaceIndex = authHeader.indexOf(" ");
+    if(SpaceIndex <= 0){
+        return undefined;
+    }
+
+    const Scheme = authHeader.slice(0, SpaceIndex).toLowerCase();
+    if(Scheme !== "bearer"){
+        return undefined;
+    }
+
+    const Token = authHeader.slice(SpaceIndex + 1).trim();
+    return Token.length > 0 ? Token : undefined;
+}
 
 loginRouter.post("/accountinfo/public", HasUndauntedMetagameAuth, async (req: any, res) => {
     const AccountIdToLookupFromRequest = req.body.accountId;
