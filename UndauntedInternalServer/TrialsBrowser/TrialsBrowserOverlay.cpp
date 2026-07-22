@@ -7,6 +7,12 @@
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <atomic>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <system_error>
+#include <thread>
+#include <utility>
 #include <vector>
 #include <windows.h>
 #include <windowsx.h>
@@ -17,7 +23,12 @@
 
 using namespace SDK;
 
+namespace Globals {
+    extern bool AmServer;
+}
+
 namespace TrialsBrowserOverlay {
+
     namespace {
         enum ControlId {
             kDifficultyCombo = 1001,
@@ -31,6 +42,7 @@ namespace TrialsBrowserOverlay {
         };
 
         constexpr UINT kToggleWindowMessage = WM_APP + 1;
+        constexpr UINT kApplyQueueUpdateMessage = WM_APP + 2;
 
         HWND Window = nullptr;
         HWND StatusLabel = nullptr;
@@ -47,10 +59,14 @@ namespace TrialsBrowserOverlay {
         bool PrivateHuntChecked = true;
         bool TrackingDetailsMouse = false;
         int HoveredModifier = -1;
+        std::wstring ModifierTooltipText;
         TrialDetails CurrentDetails;
         std::vector<ModifierChipHitRegion> ModifierHitRegions;
         std::atomic_bool Started = false;
-        std::atomic<DWORD> UiThreadId = 0;
+        std::atomic_bool StartRequested = false;
+        std::mutex QueueUiUpdateMutex;
+        std::optional<QueueUiUpdate> PendingQueueUiUpdate;
+        DWORD UiThreadId = 0;
 
         void HideModifierTooltip() {
             if (ModifierTooltip != nullptr && DetailsPanel != nullptr) {
@@ -95,7 +111,8 @@ namespace TrialsBrowserOverlay {
             Tool.cbSize = sizeof(Tool);
             Tool.hwnd = DetailsPanel;
             Tool.uId = 1;
-            Tool.lpszText = const_cast<wchar_t*>(ModifierHitRegions[HitIndex].Description);
+            ModifierTooltipText = ModifierHitRegions[HitIndex].Description;
+            Tool.lpszText = ModifierTooltipText.data();
             ApplyModifierTooltipStyle(&ModifierHitRegions[HitIndex].Style);
             SendMessageW(ModifierTooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&Tool));
 
@@ -168,6 +185,46 @@ namespace TrialsBrowserOverlay {
                     InvalidateRect(Button, nullptr, TRUE);
                 }
             }
+        }
+
+        void ApplyQueueUiUpdate(const QueueUiUpdate& Update) {
+            EnableQueueButtons(Update.ButtonsEnabled);
+            SetStatus(Update.Status);
+        }
+
+        void EnableQueueUiUpdates() {
+            std::lock_guard<std::mutex> Lock(QueueUiUpdateMutex);
+            PendingQueueUiUpdate.reset();
+            UiThreadId = GetCurrentThreadId();
+        }
+
+        void DisableQueueUiUpdates() {
+            std::lock_guard<std::mutex> Lock(QueueUiUpdateMutex);
+            UiThreadId = 0;
+            PendingQueueUiUpdate.reset();
+        }
+
+        void PublishQueueUiUpdate(QueueUiUpdate Update) {
+            std::lock_guard<std::mutex> Lock(QueueUiUpdateMutex);
+            if (UiThreadId == 0)
+                return;
+
+            PendingQueueUiUpdate = std::move(Update);
+            PostThreadMessageW(UiThreadId, kApplyQueueUpdateMessage, 0, 0);
+        }
+
+        void PostUiThreadMessage(UINT Message) {
+            std::lock_guard<std::mutex> Lock(QueueUiUpdateMutex);
+            if (UiThreadId != 0)
+                PostThreadMessageW(UiThreadId, Message, 0, 0);
+        }
+
+        std::optional<QueueUiUpdate> TakeQueueUiUpdate() {
+            std::lock_guard<std::mutex> Lock(QueueUiUpdateMutex);
+            if (UiThreadId == 0)
+                return std::nullopt;
+
+            return std::exchange(PendingQueueUiUpdate, std::nullopt);
         }
 
         void ToggleWindow() {
@@ -299,8 +356,11 @@ namespace TrialsBrowserOverlay {
             if (HWND Atmosphere = GetDlgItem(Hwnd, kAtmosphereCombo); Atmosphere != nullptr) {
                 const int Selected = AtmosphereIndex(Hwnd);
                 std::wstring DefaultLabel = L"Default";
-                if (!CurrentDetails.Atmosphere.empty())
-                    DefaultLabel += L" (" + CurrentDetails.Atmosphere + L")";
+                if (!CurrentDetails.Atmosphere.empty()) {
+                    DefaultLabel.append(L" (");
+                    DefaultLabel.append(CurrentDetails.Atmosphere);
+                    DefaultLabel.push_back(L')');
+                }
                 SendMessageW(Atmosphere, CB_DELETESTRING, 0, 0);
                 SendMessageW(Atmosphere, CB_INSERTSTRING, 0, reinterpret_cast<LPARAM>(DefaultLabel.c_str()));
                 SendMessageW(Atmosphere, CB_SETCURSEL, Selected >= 0 ? Selected : 0, 0);
@@ -320,16 +380,13 @@ namespace TrialsBrowserOverlay {
             const wchar_t* Suffix = Atmosphere >= 0 && Atmosphere < 3
                 ? AtmosphereSuffixes[Atmosphere]
                 : L"";
-            wchar_t HuntId[80] = {};
-            swprintf_s(HuntId, L"%s%S%s", Prefix, Row->Suffix, Suffix);
-            return HuntId;
+            return std::wstring(Prefix) + Row->Suffix + Suffix;
         }
 
         void CreateControls(HWND Hwnd) {
             UiFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
             ButtonFont = CreateFontW(15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-            if (DarkBrush == nullptr)
-                DarkBrush = CreateSolidBrush(kBg);
+            DarkBrush = CreateSolidBrush(kBg);
             ControlBrush = CreateSolidBrush(kPanel);
 
             HWND Behemoth = CreateCombo(Hwnd, kBehemothCombo, 16, 16, 360, 400);
@@ -389,13 +446,17 @@ namespace TrialsBrowserOverlay {
 
         void DestroyResources() {
             HideModifierTooltip();
-            if (ModifierTooltip != nullptr) DestroyWindow(ModifierTooltip);
+            if (ModifierTooltip != nullptr && IsWindow(ModifierTooltip))
+                DestroyWindow(ModifierTooltip);
             if (UiFont != nullptr) DeleteObject(UiFont);
             if (ButtonFont != nullptr) DeleteObject(ButtonFont);
             if (DarkBrush != nullptr) DeleteObject(DarkBrush);
             if (ControlBrush != nullptr) DeleteObject(ControlBrush);
             if (TitleIconSmall != nullptr) DestroyIcon(TitleIconSmall);
             if (TitleIconBig != nullptr) DestroyIcon(TitleIconBig);
+            Window = nullptr;
+            StatusLabel = nullptr;
+            DetailsPanel = nullptr;
             UiFont = nullptr;
             ButtonFont = nullptr;
             DarkBrush = nullptr;
@@ -403,10 +464,13 @@ namespace TrialsBrowserOverlay {
             TitleIconSmall = nullptr;
             TitleIconBig = nullptr;
             ModifierTooltip = nullptr;
+            ModifierTooltipText.clear();
+            OriginalComboProc = nullptr;
             OriginalDetailsProc = nullptr;
+            TrackingDetailsMouse = false;
+            HoveredModifier = -1;
             CurrentDetails = TrialDetails{};
             ModifierHitRegions.clear();
-            ModifierHitRegions.shrink_to_fit();
             ResetQueue();
         }
 
@@ -428,6 +492,13 @@ namespace TrialsBrowserOverlay {
                 SetTextColor(reinterpret_cast<HDC>(WParam), kText);
                 SetBkColor(reinterpret_cast<HDC>(WParam), kPanel);
                 return reinterpret_cast<LRESULT>(ControlBrush);
+
+            case WM_ERASEBKGND: {
+                RECT ClientRect = {};
+                GetClientRect(Hwnd, &ClientRect);
+                FillRectColor(reinterpret_cast<HDC>(WParam), ClientRect, kBg);
+                return TRUE;
+            }
 
             case WM_MEASUREITEM: {
                 auto* Measure = reinterpret_cast<MEASUREITEMSTRUCT*>(LParam);
@@ -476,10 +547,10 @@ namespace TrialsBrowserOverlay {
                     UpdateTrialDetails(Hwnd);
                 }
                 else if (LOWORD(WParam) == kQueueButton) {
-                    SubmitFindHunt(SelectedPlayerHuntId(Hwnd), PrivateHuntChecked, SetStatus, EnableQueueButtons);
+                    ApplyQueueUiUpdate(SubmitFindHunt(SelectedPlayerHuntId(Hwnd), PrivateHuntChecked));
                 }
                 else if (LOWORD(WParam) == kRamsgateButton) {
-                    SubmitFindHunt(kRamsgatePlayerHuntId, true, SetStatus, EnableQueueButtons);
+                    ApplyQueueUiUpdate(SubmitFindHunt(kRamsgatePlayerHuntId, true));
                 }
                 return 0;
 
@@ -489,6 +560,7 @@ namespace TrialsBrowserOverlay {
                 return 0;
 
             case WM_DESTROY:
+                DisableQueueUiUpdates();
                 HideModifierTooltip();
                 PostQuitMessage(0);
                 return 0;
@@ -498,24 +570,26 @@ namespace TrialsBrowserOverlay {
             }
         }
 
-        DWORD WINAPI UiThread(LPVOID) {
-            UiThreadId = GetCurrentThreadId();
+        void UiThread() {
+            // Force creation of the thread message queue before publishing its ID.
+            MSG BootstrapMessage = {};
+            PeekMessageW(&BootstrapMessage, nullptr, 0, 0, PM_NOREMOVE);
+
             INITCOMMONCONTROLSEX CommonControls = { sizeof(CommonControls), ICC_WIN95_CLASSES };
             InitCommonControlsEx(&CommonControls);
-
-            if (DarkBrush == nullptr)
-                DarkBrush = CreateSolidBrush(kBg);
 
             WNDCLASSW WindowClass = {};
             WindowClass.lpfnWndProc = WindowProc;
             WindowClass.hInstance = GetModuleHandleW(nullptr);
             WindowClass.lpszClassName = L"UndauntedTrialsBrowserOverlay";
             WindowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-            WindowClass.hbrBackground = DarkBrush;
-            TitleIconSmall = CreateTransparentIcon(16);
-            TitleIconBig = CreateTransparentIcon(32);
-            WindowClass.hIcon = TitleIconBig;
             const ATOM WindowClassAtom = RegisterClassW(&WindowClass);
+            const bool OwnsWindowClass = WindowClassAtom != 0;
+            if (!OwnsWindowClass && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+                DestroyResources();
+                Started = false;
+                return;
+            }
 
             Window = CreateWindowExW(
                 WS_EX_TOPMOST,
@@ -533,17 +607,19 @@ namespace TrialsBrowserOverlay {
             );
 
             if (Window == nullptr) {
-                if (WindowClassAtom != 0)
+                if (OwnsWindowClass)
                     UnregisterClassW(WindowClass.lpszClassName, WindowClass.hInstance);
                 DestroyResources();
-                UiThreadId = 0;
                 Started = false;
-                return 0;
+                return;
             }
 
+            TitleIconSmall = CreateTransparentIcon(16);
+            TitleIconBig = CreateTransparentIcon(32);
             SendMessageW(Window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(TitleIconSmall));
             SendMessageW(Window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(TitleIconBig));
             ShowWindow(Window, SW_HIDE);
+            EnableQueueUiUpdates();
 
             MSG Message = {};
             while (GetMessageW(&Message, nullptr, 0, 0) > 0) {
@@ -551,47 +627,64 @@ namespace TrialsBrowserOverlay {
                     ToggleWindow();
                     continue;
                 }
+                if (Message.hwnd == nullptr && Message.message == kApplyQueueUpdateMessage) {
+                    if (const std::optional<QueueUiUpdate> Update = TakeQueueUiUpdate(); Update.has_value())
+                        ApplyQueueUiUpdate(*Update);
+                    continue;
+                }
                 TranslateMessage(&Message);
                 DispatchMessageW(&Message);
             }
 
-            if (WindowClassAtom != 0)
+            DisableQueueUiUpdates();
+            if (Window != nullptr && IsWindow(Window))
+                DestroyWindow(Window);
+            if (OwnsWindowClass)
                 UnregisterClassW(WindowClass.lpszClassName, WindowClass.hInstance);
             DestroyResources();
-            Window = nullptr;
-            UiThreadId = 0;
             Started = false;
-            return 0;
+        }
+
+        void LaunchUiThread() {
+            bool Expected = false;
+            if (!Started.compare_exchange_strong(Expected, true))
+                return;
+
+            try {
+                std::thread(UiThread).detach();
+            }
+            catch (const std::system_error&) {
+                Started = false;
+            }
         }
     }
 
     void Start() {
-        bool Expected = false;
-        if (!Started.compare_exchange_strong(Expected, true))
+        if (Globals::AmServer)
             return;
 
-        DWORD ThreadId = 0;
-        HANDLE Thread = CreateThread(nullptr, 0, UiThread, nullptr, 0, &ThreadId);
-        if (Thread != nullptr) {
-            CloseHandle(Thread);
-        }
-        else {
-            Started = false;
-        }
+        // Start is called while the DLL is attaching. Launch from the first game tick instead.
+        StartRequested = true;
     }
 
     void Tick(UObject* WorldContextObject) {
+        if (Globals::AmServer)
+            return;
+
+        if (StartRequested.exchange(false))
+            LaunchUiThread();
+
         static bool WasF7Down = false;
         const bool IsF7Down = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
         if (IsF7Down && !WasF7Down) {
             DWORD ForegroundProcessId = 0;
             GetWindowThreadProcessId(GetForegroundWindow(), &ForegroundProcessId);
-            const DWORD ThreadId = UiThreadId.load();
-            if (ForegroundProcessId == GetCurrentProcessId() && ThreadId != 0)
-                PostThreadMessageW(ThreadId, kToggleWindowMessage, 0, 0);
+            if (ForegroundProcessId == GetCurrentProcessId())
+                PostUiThreadMessage(kToggleWindowMessage);
         }
         WasF7Down = IsF7Down;
 
-        TickQueue(WorldContextObject, SetStatus, EnableQueueButtons);
+        if (std::optional<QueueUiUpdate> Update = TickQueue(WorldContextObject); Update.has_value())
+            PublishQueueUiUpdate(std::move(*Update));
     }
 }

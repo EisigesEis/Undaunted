@@ -62,6 +62,7 @@ namespace TrialsBrowserOverlay {
         DangerZones,
         Bombers,
         TrackingLightning,
+        Count
     };
 
     struct ModifierStyle {
@@ -94,13 +95,13 @@ namespace TrialsBrowserOverlay {
     };
 
     struct ModifierChip {
-        const wchar_t* Text = L"";
-        const wchar_t* Description = L"";
+        std::wstring Text;
+        std::wstring Description;
         ModifierStyle Style = {};
     };
 
     struct TrialRow {
-        const char* Suffix;
+        const wchar_t* Suffix;
         const wchar_t* Behemoth;
         BehemothElement Element;
         const wchar_t* Ids;

@@ -2,11 +2,47 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string>
 #include <uxtheme.h>
 #include <dwmapi.h>
 
 namespace TrialsBrowserOverlay {
     namespace {
+        std::wstring ReadComboItemText(HWND Combo, int ItemIndex) {
+            if (Combo == nullptr || ItemIndex == CB_ERR)
+                return {};
+
+            const LRESULT Length = SendMessageW(Combo, CB_GETLBTEXTLEN, ItemIndex, 0);
+            if (Length == CB_ERR || Length < 0)
+                return {};
+
+            std::wstring Text(static_cast<size_t>(Length) + 1, L'\0');
+            const LRESULT Copied = SendMessageW(Combo, CB_GETLBTEXT, ItemIndex,
+                reinterpret_cast<LPARAM>(Text.data()));
+            if (Copied == CB_ERR || Copied < 0)
+                return {};
+
+            Text.resize(static_cast<size_t>(Copied));
+            return Text;
+        }
+
+        std::wstring ReadWindowText(HWND Window) {
+            if (Window == nullptr)
+                return {};
+
+            const int Length = GetWindowTextLengthW(Window);
+            if (Length <= 0)
+                return {};
+
+            std::wstring Text(static_cast<size_t>(Length) + 1, L'\0');
+            const int Copied = GetWindowTextW(Window, Text.data(), Length + 1);
+            if (Copied <= 0)
+                return {};
+
+            Text.resize(static_cast<size_t>(Copied));
+            return Text;
+        }
+
         void FrameRectColor(HDC Dc, const RECT& Rect, COLORREF Color) {
             HBRUSH Brush = CreateSolidBrush(Color);
             FrameRect(Dc, &Rect, Brush);
@@ -63,12 +99,12 @@ namespace TrialsBrowserOverlay {
             TextRect.right -= 14;
 
             SetTextColor(Dc, Chip.Style.Text);
-            DrawTextW(Dc, Chip.Text, -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            DrawTextW(Dc, Chip.Text.c_str(), -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
 
         int MeasureChipWidth(HDC Dc, const ModifierChip& Chip) {
             RECT TextRect = {};
-            DrawTextW(Dc, Chip.Text, -1, &TextRect, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+            DrawTextW(Dc, Chip.Text.c_str(), -1, &TextRect, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
             return (std::max)(46L, TextRect.right - TextRect.left + 30L);
         }
     }
@@ -96,8 +132,7 @@ namespace TrialsBrowserOverlay {
         if (Item == nullptr)
             return;
 
-        wchar_t Text[160] = {};
-        GetWindowTextW(Item->hwndItem, Text, static_cast<int>(std::size(Text)));
+        const std::wstring Text = ReadWindowText(Item->hwndItem);
 
         const bool Pressed = (Item->itemState & ODS_SELECTED) != 0;
         const bool Focused = (Item->itemState & ODS_FOCUS) != 0;
@@ -107,7 +142,7 @@ namespace TrialsBrowserOverlay {
 
         FillRectColor(Item->hDC, Item->rcItem, Fill);
         FrameRectColor(Item->hDC, Item->rcItem, Focused ? kBorderFocus : kBorder);
-        DrawCenteredText(Item->hDC, Item->rcItem, Text, Font, TextColor);
+        DrawCenteredText(Item->hDC, Item->rcItem, Text.c_str(), Font, TextColor);
     }
 
     void DrawDarkCheckbox(const DRAWITEMSTRUCT* Item, bool Checked) {
@@ -194,7 +229,7 @@ namespace TrialsBrowserOverlay {
 
             const RECT ChipRect = { X, Y, X + Width, Y + ChipHeight };
             DrawChip(Item->hDC, ChipRect, Chip);
-            if (HitRegions != nullptr && Chip.Description != nullptr && Chip.Description[0] != L'\0')
+            if (HitRegions != nullptr && !Chip.Description.empty())
                 HitRegions->push_back({ ChipRect, Chip.Description, Chip.Style });
             X += Width + ChipGap;
         }
@@ -207,11 +242,9 @@ namespace TrialsBrowserOverlay {
         if (Item == nullptr)
             return;
 
-        wchar_t Text[1024] = {};
-        if (Item->itemID != static_cast<UINT>(-1))
-            SendMessageW(Item->hwndItem, CB_GETLBTEXT, Item->itemID, reinterpret_cast<LPARAM>(Text));
-        else
-            GetWindowTextW(Item->hwndItem, Text, static_cast<int>(std::size(Text)));
+        const std::wstring Text = Item->itemID != static_cast<UINT>(-1)
+            ? ReadComboItemText(Item->hwndItem, static_cast<int>(Item->itemID))
+            : ReadWindowText(Item->hwndItem);
 
         const bool Selected = (Item->itemState & ODS_SELECTED) != 0;
         const bool Focused = (Item->itemState & ODS_FOCUS) != 0;
@@ -224,7 +257,7 @@ namespace TrialsBrowserOverlay {
         HFONT OldFont = Font != nullptr ? static_cast<HFONT>(SelectObject(Item->hDC, Font)) : nullptr;
         SetBkMode(Item->hDC, TRANSPARENT);
         SetTextColor(Item->hDC, ComboTextColor(static_cast<int>(Item->itemID), BehemothCombo, Selected, DifficultyIndex));
-        DrawTextW(Item->hDC, Text, -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(Item->hDC, Text.c_str(), -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (OldFont != nullptr)
             SelectObject(Item->hDC, OldFont);
 
@@ -243,10 +276,8 @@ namespace TrialsBrowserOverlay {
             ArrowRect.left = Rect.left;
         FillRectColor(Dc, ArrowRect, kPanelHover);
 
-        wchar_t Text[1024] = {};
         const int SelectedIndex = static_cast<int>(SendMessageW(Hwnd, CB_GETCURSEL, 0, 0));
-        if (SelectedIndex != CB_ERR)
-            SendMessageW(Hwnd, CB_GETLBTEXT, SelectedIndex, reinterpret_cast<LPARAM>(Text));
+        const std::wstring Text = ReadComboItemText(Hwnd, SelectedIndex);
 
         RECT TextRect = Rect;
         TextRect.left += 7;
@@ -257,7 +288,7 @@ namespace TrialsBrowserOverlay {
         HFONT OldFont = Font != nullptr ? static_cast<HFONT>(SelectObject(Dc, Font)) : nullptr;
         SetBkMode(Dc, TRANSPARENT);
         SetTextColor(Dc, IsWindowEnabled(Hwnd) ? ComboTextColor(SelectedIndex, BehemothCombo, false, DifficultyIndex) : RGB(120, 128, 140));
-        DrawTextW(Dc, Text, -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(Dc, Text.c_str(), -1, &TextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (OldFont != nullptr)
             SelectObject(Dc, OldFont);
 

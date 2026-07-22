@@ -18,7 +18,7 @@ namespace TrialsBrowserOverlay {
 
     struct ModifierChipHitRegion {
         RECT Rect = {};
-        const wchar_t* Description = L"";
+        std::wstring Description;
         ModifierStyle Style = {};
     };
 

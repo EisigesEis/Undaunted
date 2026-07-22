@@ -1,10 +1,15 @@
 #include "TrialsBrowserData.h"
 
-#include <array>
-#include <cwchar>
+#include <iterator>
+#include <string>
+#include <type_traits>
 
 namespace TrialsBrowserOverlay {
     namespace {
+        static_assert(
+            static_cast<std::underlying_type_t<ModifierId>>(ModifierId::Count) <= 64,
+            "ModifierId count exceeded 64-bit bitmask capacity");
+
         using E = BehemothElement;
         using M = ModifierId;
         using S = ModifierStyleId;
@@ -13,60 +18,58 @@ namespace TrialsBrowserOverlay {
             return 1ull << static_cast<uint8_t>(Id);
         }
 
-#define MODS(...) (__VA_ARGS__)
 #define B(Name) Bit(M::Name)
-#define ROW(Suffix, Name, Element, Ids, Lvl, Pwr, Atmosphere, Mods) { Suffix, L##Name, E::Element, L##Ids, Lvl, Pwr, Atmosphere, Mods }
+#define ROW(Suffix, Name, Element, Ids, Lvl, Pwr, Atmosphere, Mods) { L##Suffix, L##Name, E::Element, L##Ids, Lvl, Pwr, Atmosphere, Mods }
 
         constexpr TrialRow NormalTrials[] = {
-            ROW("001", "Shockjaw Nayzaga", Shock, "001, 014, 027, 040", 18, 600, nullptr, MODS(B(SelfRevive) | B(Nearsight) | B(Shielded) | B(Fortifications) | B(Electrify))),
-            ROW("002", "Shrowd", Umbral, "002, 015, 028, 041, 082", 18, 600, nullptr, MODS(B(SelfRevive) | B(FrostSmollusks) | B(Combustion))),
-            ROW("003", "Deadeye Quillshot", Neutral, "003, 016, 029, 042, 062, 087", 18, 600, nullptr, MODS(B(SelfRevive) | B(Whiteout) | B(FrigidTouch))),
-            ROW("004", "Bloodfire Embermane", Blaze, "004, 017, 030, 047, 064, 088", 18, 600, nullptr, MODS(B(SelfRevive) | B(StaticShock) | B(Electrify) | B(Inferno))),
-            ROW("005", "Winterhorn Skraev", Frost, "005, 018, 031, 048, 065, 080", 18, 600, nullptr, MODS(B(SelfRevive) | B(UmbralInstability) | B(ToughHide))),
-            ROW("006", "Razorwing Kharabak", Terra, "006, 019, 032, 050, 067, 081", 18, 600, nullptr, MODS(B(SelfRevive) | B(ShockSmollusks) | B(SovereignsChosen) | B(Jagged))),
-            ROW("007", "Koshai", Terra, "007, 020, 033, 051, 068, 083", 18, 600, nullptr, MODS(B(SelfRevive) | B(StyxianSacrifice))),
-            ROW("008", "Rezakiri", Radiant, "008, 021, 034, 053, 070", 18, 600, nullptr, MODS(B(SelfRevive) | B(RadiantSmollusks) | B(FlamingTail))),
-            ROW("009", "Firebrand Charrogg", Blaze, "009, 022, 035, 054, 072", 18, 600, nullptr, MODS(B(SelfRevive) | B(Whiteout) | B(Inferno))),
-            ROW("010", "Moonreaver Shrike", Neutral, "010, 023, 036, 056, 073", 18, 600, nullptr, MODS(B(SelfRevive) | B(StyxianSacrifice) | B(Momentum))),
-            ROW("011", "Rockfall Skarn", Terra, "011, 024, 037, 057, 074", 18, 600, nullptr, MODS(B(SelfRevive) | B(VolcanicVitriol) | B(BehemothBlitz))),
-            ROW("012", "Frostback Pangar", Frost, "012, 025, 038, 075", 18, 600, nullptr, MODS(B(SelfRevive) | B(CursedLightning) | B(Electrify))),
-            ROW("013", "Ragetail Gnasher", Neutral, "013, 026, 039, 060, 077", 18, 600, nullptr, MODS(B(SelfRevive) | B(StaticShock) | B(Jagged) | B(Fury))),
-            ROW("043", "Malkarion", Shock, "043, 049, 066, 085", 18, 600, nullptr, MODS(B(SelfRevive) | B(DeepFreeze))),
-            ROW("044", "Tempestborne Stormclaw", Shock, "044, 052, 069, 079", 18, 600, nullptr, MODS(B(SelfRevive) | B(HotSpot) | B(Fortifications) | B(StyxianSacrifice))),
-            ROW("045", "Dreadfrost Boreus", Frost, "045, 055, 071", 18, 600, nullptr, MODS(B(SelfRevive) | B(WeakSpot) | B(LightningStars))),
-            ROW("046", "Drask", Shock, "046, 059, 076", 18, 600, nullptr, MODS(B(SelfRevive) | B(BehemothBlitz) | B(ThickSkull) | B(StaticShock))),
-            ROW("058", "Shadowtouched Koshai", Umbral, "058, 086", 18, 600, nullptr, MODS(B(SelfRevive) | B(BleedoutVines) | B(UmbralStars))),
-            ROW("061", "Shadowtouched Nayzaga", Umbral, "061, 078", 18, 600, nullptr, MODS(B(SelfRevive) | B(BehemothBlitz) | B(DangerZones))),
-            ROW("063", "Shadowtouched Drask", Umbral, "063, 084", 18, 600, nullptr, MODS(B(SelfRevive) | B(SplittingUmbral) | B(UmbralSmollusks))),
+            ROW("001", "Shockjaw Nayzaga", Shock, "001, 014, 027, 040", 18, 600, L"", B(SelfRevive) | B(Nearsight) | B(Shielded) | B(Fortifications) | B(Electrify)),
+            ROW("002", "Shrowd", Umbral, "002, 015, 028, 041, 082", 18, 600, L"", B(SelfRevive) | B(FrostSmollusks) | B(Combustion)),
+            ROW("003", "Deadeye Quillshot", Neutral, "003, 016, 029, 042, 062, 087", 18, 600, L"", B(SelfRevive) | B(Whiteout) | B(FrigidTouch)),
+            ROW("004", "Bloodfire Embermane", Blaze, "004, 017, 030, 047, 064, 088", 18, 600, L"", B(SelfRevive) | B(StaticShock) | B(Electrify) | B(Inferno)),
+            ROW("005", "Winterhorn Skraev", Frost, "005, 018, 031, 048, 065, 080", 18, 600, L"", B(SelfRevive) | B(UmbralInstability) | B(ToughHide)),
+            ROW("006", "Razorwing Kharabak", Terra, "006, 019, 032, 050, 067, 081", 18, 600, L"", B(SelfRevive) | B(ShockSmollusks) | B(SovereignsChosen) | B(Jagged)),
+            ROW("007", "Koshai", Terra, "007, 020, 033, 051, 068, 083", 18, 600, L"", B(SelfRevive) | B(StyxianSacrifice)),
+            ROW("008", "Rezakiri", Radiant, "008, 021, 034, 053, 070", 18, 600, L"", B(SelfRevive) | B(RadiantSmollusks) | B(FlamingTail)),
+            ROW("009", "Firebrand Charrogg", Blaze, "009, 022, 035, 054, 072", 18, 600, L"", B(SelfRevive) | B(Whiteout) | B(Inferno)),
+            ROW("010", "Moonreaver Shrike", Neutral, "010, 023, 036, 056, 073", 18, 600, L"", B(SelfRevive) | B(StyxianSacrifice) | B(Momentum)),
+            ROW("011", "Rockfall Skarn", Terra, "011, 024, 037, 057, 074", 18, 600, L"", B(SelfRevive) | B(VolcanicVitriol) | B(BehemothBlitz)),
+            ROW("012", "Frostback Pangar", Frost, "012, 025, 038, 075", 18, 600, L"", B(SelfRevive) | B(CursedLightning) | B(Electrify)),
+            ROW("013", "Ragetail Gnasher", Neutral, "013, 026, 039, 060, 077", 18, 600, L"", B(SelfRevive) | B(StaticShock) | B(Jagged) | B(Fury)),
+            ROW("043", "Malkarion", Shock, "043, 049, 066, 085", 18, 600, L"", B(SelfRevive) | B(DeepFreeze)),
+            ROW("044", "Tempestborne Stormclaw", Shock, "044, 052, 069, 079", 18, 600, L"", B(SelfRevive) | B(HotSpot) | B(Fortifications) | B(StyxianSacrifice)),
+            ROW("045", "Dreadfrost Boreus", Frost, "045, 055, 071", 18, 600, L"", B(SelfRevive) | B(WeakSpot) | B(LightningStars)),
+            ROW("046", "Drask", Shock, "046, 059, 076", 18, 600, L"", B(SelfRevive) | B(BehemothBlitz) | B(ThickSkull) | B(StaticShock)),
+            ROW("058", "Shadowtouched Koshai", Umbral, "058, 086", 18, 600, L"", B(SelfRevive) | B(BleedoutVines) | B(UmbralStars)),
+            ROW("061", "Shadowtouched Nayzaga", Umbral, "061, 078", 18, 600, L"", B(SelfRevive) | B(BehemothBlitz) | B(DangerZones)),
+            ROW("063", "Shadowtouched Drask", Umbral, "063, 084", 18, 600, L"", B(SelfRevive) | B(SplittingUmbral) | B(UmbralSmollusks)),
         };
 
         constexpr TrialRow DauntlessTrials[] = {
-            ROW("001", "Shockjaw Nayzaga", Shock, "001, 014, 027, 040", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(Nearsight) | B(IcyGrasp) | B(Shielded) | B(Fortifications) | B(Electrify) | B(Aftershock))),
-            ROW("002", "Shrowd", Umbral, "002, 015, 028, 041, 082", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(FrostSmollusks) | B(Inferno) | B(Combustion) | B(Fortifications))),
-            ROW("003", "Deadeye Quillshot", Neutral, "003, 016, 029, 042, 062, 087", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(Whiteout) | B(IcyGrasp) | B(DeepFreeze) | B(FrigidTouch))),
-            ROW("004", "Bloodfire Embermane", Blaze, "004, 017, 030, 047, 064, 088", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(StaticShock) | B(CursedLightning) | B(Electrify) | B(Inferno))),
-            ROW("005", "Winterhorn Skraev", Frost, "005, 018, 031, 048, 065, 080", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(UmbralInstability) | B(ToughHide) | B(Momentum) | B(IcyGrave))),
-            ROW("006", "Razorwing Kharabak", Terra, "006, 019, 032, 050, 067, 081", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(ShockSmollusks) | B(SovereignsChosen) | B(Jagged) | B(ToughHide))),
-            ROW("007", "Koshai", Terra, "007, 020, 033, 051, 068, 083", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(StyxianSacrifice) | B(Fortifications) | B(ViciousVigor) | B(ThickSkull))),
-            ROW("008", "Rezakiri", Radiant, "008", 22, 700, L"Arena Night", MODS(B(ZeroSelfRevive) | B(RadiantSmollusks) | B(IncandescentIncarceration) | B(Aftershock) | B(FlamingTail) | B(Inferno))),
-            ROW("009", "Firebrand Charrogg", Blaze, "009, 022, 035, 054, 072", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(Whiteout) | B(BlazeSmollusks) | B(Inferno) | B(BehemothBlitz) | B(ThickSkull))),
-            ROW("010", "Moonreaver Shrike", Neutral, "010, 023, 036, 056, 073", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(StyxianSacrifice) | B(Nearsight) | B(Momentum) | B(FrigidTouch))),
-            ROW("011", "Rockfall Skarn", Terra, "011, 024, 037, 057, 074", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(VolcanicVitriol) | B(BehemothBlitz) | B(Combustion) | B(Inferno) | B(Shockfall))),
-            ROW("012", "Frostback Pangar", Frost, "012, 025, 038, 075", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(CursedLightning) | B(Electrify) | B(DeepFreeze) | B(ThickSkull))),
-            ROW("013", "Ragetail Gnasher", Neutral, "013, 026, 039, 060, 077", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(StaticShock) | B(LeafShield) | B(Jagged) | B(Fury))),
-            ROW("021", "Rezakiri", Radiant, "021, 034, 053, 070", 22, 700, L"Night", MODS(B(ZeroSelfRevive) | B(RadiantSmollusks) | B(IncandescentIncarceration) | B(Aftershock) | B(FlamingTail) | B(Inferno))),
-            ROW("043", "Malkarion", Shock, "043, 049, 066, 085", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(BehemothBlitz) | B(DeepFreeze) | B(DangerZones))),
-            ROW("044", "Tempestborne Stormclaw", Shock, "044, 052, 069, 079", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(HotSpot) | B(Fortifications) | B(StyxianSacrifice) | B(Combustion))),
-            ROW("045", "Dreadfrost Boreus", Frost, "045, 055, 071", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(WeakSpot) | B(LightningStars) | B(Electrify) | B(Bombers))),
-            ROW("046", "Drask", Shock, "046, 059, 076", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(BehemothBlitz) | B(ThickSkull) | B(StaticShock) | B(TrackingLightning) | B(FrigidTouch))),
-            ROW("058", "Shadowtouched Koshai", Umbral, "058, 086", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(Fortifications) | B(BleedoutVines) | B(Momentum) | B(UmbralStars))),
-            ROW("061", "Shadowtouched Nayzaga", Umbral, "061, 078", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(BehemothBlitz) | B(DangerZones) | B(Combustion) | B(Inferno))),
-            ROW("063", "Shadowtouched Drask", Umbral, "063, 084", 22, 700, nullptr, MODS(B(ZeroSelfRevive) | B(BehemothBlitz) | B(UmbralInstability) | B(SplittingUmbral) | B(UmbralSmollusks) | B(Electrify))),
+            ROW("001", "Shockjaw Nayzaga", Shock, "001, 014, 027, 040", 22, 700, L"", B(ZeroSelfRevive) | B(Nearsight) | B(IcyGrasp) | B(Shielded) | B(Fortifications) | B(Electrify) | B(Aftershock)),
+            ROW("002", "Shrowd", Umbral, "002, 015, 028, 041, 082", 22, 700, L"", B(ZeroSelfRevive) | B(FrostSmollusks) | B(Inferno) | B(Combustion) | B(Fortifications)),
+            ROW("003", "Deadeye Quillshot", Neutral, "003, 016, 029, 042, 062, 087", 22, 700, L"", B(ZeroSelfRevive) | B(Whiteout) | B(IcyGrasp) | B(DeepFreeze) | B(FrigidTouch)),
+            ROW("004", "Bloodfire Embermane", Blaze, "004, 017, 030, 047, 064, 088", 22, 700, L"", B(ZeroSelfRevive) | B(StaticShock) | B(CursedLightning) | B(Electrify) | B(Inferno)),
+            ROW("005", "Winterhorn Skraev", Frost, "005, 018, 031, 048, 065, 080", 22, 700, L"", B(ZeroSelfRevive) | B(UmbralInstability) | B(ToughHide) | B(Momentum) | B(IcyGrave)),
+            ROW("006", "Razorwing Kharabak", Terra, "006, 019, 032, 050, 067, 081", 22, 700, L"", B(ZeroSelfRevive) | B(ShockSmollusks) | B(SovereignsChosen) | B(Jagged) | B(ToughHide)),
+            ROW("007", "Koshai", Terra, "007, 020, 033, 051, 068, 083", 22, 700, L"", B(ZeroSelfRevive) | B(StyxianSacrifice) | B(Fortifications) | B(ViciousVigor) | B(ThickSkull)),
+            ROW("008", "Rezakiri", Radiant, "008", 22, 700, L"Arena Night", B(ZeroSelfRevive) | B(RadiantSmollusks) | B(IncandescentIncarceration) | B(Aftershock) | B(FlamingTail) | B(Inferno)),
+            ROW("009", "Firebrand Charrogg", Blaze, "009, 022, 035, 054, 072", 22, 700, L"", B(ZeroSelfRevive) | B(Whiteout) | B(BlazeSmollusks) | B(Inferno) | B(BehemothBlitz) | B(ThickSkull)),
+            ROW("010", "Moonreaver Shrike", Neutral, "010, 023, 036, 056, 073", 22, 700, L"", B(ZeroSelfRevive) | B(StyxianSacrifice) | B(Nearsight) | B(Momentum) | B(FrigidTouch)),
+            ROW("011", "Rockfall Skarn", Terra, "011, 024, 037, 057, 074", 22, 700, L"", B(ZeroSelfRevive) | B(VolcanicVitriol) | B(BehemothBlitz) | B(Combustion) | B(Inferno) | B(Shockfall)),
+            ROW("012", "Frostback Pangar", Frost, "012, 025, 038, 075", 22, 700, L"", B(ZeroSelfRevive) | B(CursedLightning) | B(Electrify) | B(DeepFreeze) | B(ThickSkull)),
+            ROW("013", "Ragetail Gnasher", Neutral, "013, 026, 039, 060, 077", 22, 700, L"", B(ZeroSelfRevive) | B(StaticShock) | B(LeafShield) | B(Jagged) | B(Fury)),
+            ROW("021", "Rezakiri", Radiant, "021, 034, 053, 070", 22, 700, L"Night", B(ZeroSelfRevive) | B(RadiantSmollusks) | B(IncandescentIncarceration) | B(Aftershock) | B(FlamingTail) | B(Inferno)),
+            ROW("043", "Malkarion", Shock, "043, 049, 066, 085", 22, 700, L"", B(ZeroSelfRevive) | B(BehemothBlitz) | B(DeepFreeze) | B(DangerZones)),
+            ROW("044", "Tempestborne Stormclaw", Shock, "044, 052, 069, 079", 22, 700, L"", B(ZeroSelfRevive) | B(HotSpot) | B(Fortifications) | B(StyxianSacrifice) | B(Combustion)),
+            ROW("045", "Dreadfrost Boreus", Frost, "045, 055, 071", 22, 700, L"", B(ZeroSelfRevive) | B(WeakSpot) | B(LightningStars) | B(Electrify) | B(Bombers)),
+            ROW("046", "Drask", Shock, "046, 059, 076", 22, 700, L"", B(ZeroSelfRevive) | B(BehemothBlitz) | B(ThickSkull) | B(StaticShock) | B(TrackingLightning) | B(FrigidTouch)),
+            ROW("058", "Shadowtouched Koshai", Umbral, "058, 086", 22, 700, L"", B(ZeroSelfRevive) | B(Fortifications) | B(BleedoutVines) | B(Momentum) | B(UmbralStars)),
+            ROW("061", "Shadowtouched Nayzaga", Umbral, "061, 078", 22, 700, L"", B(ZeroSelfRevive) | B(BehemothBlitz) | B(DangerZones) | B(Combustion) | B(Inferno)),
+            ROW("063", "Shadowtouched Drask", Umbral, "063, 084", 22, 700, L"", B(ZeroSelfRevive) | B(BehemothBlitz) | B(UmbralInstability) | B(SplittingUmbral) | B(UmbralSmollusks) | B(Electrify)),
         };
 
 #undef ROW
 #undef B
-#undef MODS
 
         constexpr ModifierStyle ModifierStyles[] = {
             { RGB(72, 30, 35), RGB(207, 62, 70), RGB(255, 225, 226), RGB(255, 50, 58) },
@@ -149,9 +152,7 @@ namespace TrialsBrowserOverlay {
     }
 
     std::wstring TrialComboLabel(const TrialRow& Row) {
-        wchar_t Label[256] = {};
-        swprintf_s(Label, L"%S - %s", Row.Suffix, Row.Behemoth);
-        return Label;
+        return std::wstring(Row.Suffix) + L" - " + Row.Behemoth;
     }
 
     TrialDetails BuildTrialDetails(const TrialRow& Row) {
@@ -159,13 +160,8 @@ namespace TrialsBrowserOverlay {
         Details.Behemoth = Row.Behemoth;
         Details.Element = Row.Element;
         Details.Ids = Row.Ids;
-
-        wchar_t ThreatPower[64] = {};
-        swprintf_s(ThreatPower, L"Lvl %d / Power %d", Row.Level, Row.Power);
-        Details.ThreatPower = ThreatPower;
-
-        if (Row.Atmosphere != nullptr)
-            Details.Atmosphere = Row.Atmosphere;
+        Details.ThreatPower = L"Lvl " + std::to_wstring(Row.Level) + L" / Power " + std::to_wstring(Row.Power);
+        Details.Atmosphere = Row.Atmosphere;
 
         Details.Modifiers.reserve(std::size(Modifiers));
         for (const ModifierDef& Def : Modifiers) {

@@ -2,15 +2,18 @@
 
 #include "../SDK.hpp"
 
+#include <optional>
 #include <string>
 
 namespace TrialsBrowserOverlay {
-    using StatusSink = void(*)(const std::wstring&);
-    using ButtonsSink = void(*)(bool);
+    struct QueueUiUpdate {
+        std::wstring Status;
+        bool ButtonsEnabled = true;
+    };
 
     constexpr const wchar_t* kRamsgatePlayerHuntId = L"ShatteredIsles_ReturnToRamsgate";
 
-    void SubmitFindHunt(const std::wstring& PlayerHuntId, bool SkipMatchmaking, StatusSink SetStatus, ButtonsSink EnableButtons);
-    void TickQueue(SDK::UObject* WorldContextObject, StatusSink SetStatus, ButtonsSink EnableButtons);
+    QueueUiUpdate SubmitFindHunt(const std::wstring& PlayerHuntId, bool SkipMatchmaking);
+    std::optional<QueueUiUpdate> TickQueue(SDK::UObject* WorldContextObject);
     void ResetQueue();
 }

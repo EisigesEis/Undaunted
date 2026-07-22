@@ -4,6 +4,7 @@
 #include <cwctype>
 #include <iostream>
 #include <mutex>
+#include <utility>
 #include <windows.h>
 
 using namespace SDK;
@@ -16,22 +17,15 @@ namespace Globals {
 
 namespace TrialsBrowserOverlay {
     namespace {
-        enum class PendingActionType {
-            None,
-            FindHunt,
-        };
-
         struct PendingAction {
-            PendingActionType Type = PendingActionType::None;
             std::wstring PlayerHuntId;
             bool SkipMatchmaking = true;
         };
 
         std::mutex PendingMutex;
-        PendingAction Pending;
+        std::optional<PendingAction> Pending;
         std::mutex QueueMutex;
-        std::wstring ActiveQueueHuntId;
-        std::chrono::steady_clock::time_point ActiveQueueAt;
+        std::optional<std::chrono::steady_clock::time_point> ActiveQueueAt;
         constexpr auto kAcceptedQueueGrace = std::chrono::seconds(5);
 
         std::string WideToUtf8(const std::wstring& Value) {
@@ -78,11 +72,9 @@ namespace TrialsBrowserOverlay {
             return Value.find(Needle) != std::wstring::npos;
         }
 
-        PendingAction TakePendingAction() {
+        std::optional<PendingAction> TakePendingAction() {
             std::lock_guard<std::mutex> Lock(PendingMutex);
-            PendingAction Action = Pending;
-            Pending = {};
-            return Action;
+            return std::exchange(Pending, std::nullopt);
         }
 
         std::wstring CurrentMapContext() {
@@ -129,36 +121,29 @@ namespace TrialsBrowserOverlay {
             const auto Now = std::chrono::steady_clock::now();
 
             std::lock_guard<std::mutex> Lock(QueueMutex);
-            if (ActiveQueueHuntId.empty())
+            if (!ActiveQueueAt.has_value())
                 return IsMatchmaking;
 
-            if (!IsMatchmaking && Now - ActiveQueueAt >= kAcceptedQueueGrace) {
-                ActiveQueueHuntId.clear();
+            if (!IsMatchmaking && Now - *ActiveQueueAt >= kAcceptedQueueGrace) {
+                ActiveQueueAt.reset();
                 return false;
             }
 
             return true;
         }
 
-        void MarkQueueStarted(const std::wstring& PlayerHuntId) {
+        void MarkQueueStarted() {
             std::lock_guard<std::mutex> Lock(QueueMutex);
-            ActiveQueueHuntId = PlayerHuntId;
             ActiveQueueAt = std::chrono::steady_clock::now();
         }
 
-        void ExecuteFindHunt(UObject* WorldContextObject, const PendingAction& Action, StatusSink SetStatus, ButtonsSink EnableButtons) {
+        QueueUiUpdate ExecuteFindHunt(UObject* WorldContextObject, const PendingAction& Action) {
             AArchonPartyClient* Party = GetPartyClient(WorldContextObject);
-            if (Party == nullptr) {
-                EnableButtons(true);
-                SetStatus(L"Party client not ready.");
-                return;
-            }
+            if (Party == nullptr)
+                return { L"Party client not ready.", true };
 
-            if (!CanQueue(WorldContextObject, Party)) {
-                EnableButtons(true);
-                SetStatus(L"Load ramsgate/dojo/island before queue.");
-                return;
-            }
+            if (!CanQueue(WorldContextObject, Party))
+                return { L"Load ramsgate/dojo/island before queue.", true };
 
             const int PartyMemberCount = Party->CurrentParty.PartyMembers.Num();
             bool FoundLocalPartyMember = false;
@@ -173,75 +158,58 @@ namespace TrialsBrowserOverlay {
                 break;
             }
 
-            if (PartyMemberCount > 1 && (!FoundLocalPartyMember || !LocalPartyMemberIsLeader)) {
-                EnableButtons(true);
-                SetStatus(L"Only the party leader can queue.");
-                return;
-            }
+            if (PartyMemberCount > 1 && (!FoundLocalPartyMember || !LocalPartyMemberIsLeader))
+                return { L"Only the party leader can queue.", true };
 
-            if (IsQueueBusy(Party)) {
-                EnableButtons(true);
-                SetStatus(L"Matchmaking already ongoing.\r\nAbandon that hunt first.");
-                return;
-            }
+            if (IsQueueBusy(Party))
+                return { L"Matchmaking already ongoing.\r\nAbandon that hunt first.", true };
 
             const FName PlayerHuntId = BasicFilesImplUtils::StringToName(Action.PlayerHuntId.c_str());
             const bool Started = Party->FindHunt(PlayerHuntId, Action.SkipMatchmaking, FName());
             if (Started)
-                MarkQueueStarted(Action.PlayerHuntId);
-
-            EnableButtons(true);
-            SetStatus(Started ? L"FindHunt accepted.\r\n" + Action.PlayerHuntId : L"FindHunt rejected.\r\n" + Action.PlayerHuntId);
+                MarkQueueStarted();
 
             if (Globals::EnableLogging && !Globals::AmServer)
                 std::cout << "[TrialsBrowserUI] FindHunt " << WideToUtf8(Action.PlayerHuntId) << " result=" << (Started ? 1 : 0) << std::endl;
+
+            return {
+                Started ? L"FindHunt accepted.\r\n" + Action.PlayerHuntId : L"FindHunt rejected.\r\n" + Action.PlayerHuntId,
+                true
+            };
         }
     }
 
-    void SubmitFindHunt(const std::wstring& PlayerHuntId, bool SkipMatchmaking, StatusSink SetStatus, ButtonsSink EnableButtons) {
-        if (PlayerHuntId.empty()) {
-            SetStatus(L"Select a trial first.");
-            return;
-        }
+    QueueUiUpdate SubmitFindHunt(const std::wstring& PlayerHuntId, bool SkipMatchmaking) {
+        if (PlayerHuntId.empty())
+            return { L"Select a trial first.", true };
 
         {
             std::lock_guard<std::mutex> Lock(PendingMutex);
-            if (Pending.Type != PendingActionType::None) {
-                SetStatus(L"Queue request already pending. No new request sent.");
-                return;
-            }
+            if (Pending.has_value())
+                return { L"Queue request already pending. No new request sent.", true };
 
-            Pending.Type = PendingActionType::FindHunt;
-            Pending.PlayerHuntId = PlayerHuntId;
-            Pending.SkipMatchmaking = SkipMatchmaking;
+            Pending.emplace(PendingAction{ PlayerHuntId, SkipMatchmaking });
         }
-
-        EnableButtons(false);
-        SetStatus(L"Sending queue request...");
 
         if (Globals::EnableLogging && !Globals::AmServer) {
             std::cout << "[TrialsBrowserUI] pending FindHunt " << WideToUtf8(PlayerHuntId)
                 << " skipMatchmaking=" << (SkipMatchmaking ? 1 : 0)
                 << std::endl;
         }
+
+        return { L"Sending queue request...", false };
     }
 
-    void TickQueue(UObject* WorldContextObject, StatusSink SetStatus, ButtonsSink EnableButtons) {
-        const PendingAction Action = TakePendingAction();
-        if (Action.Type == PendingActionType::FindHunt)
-            ExecuteFindHunt(WorldContextObject, Action, SetStatus, EnableButtons);
+    std::optional<QueueUiUpdate> TickQueue(UObject* WorldContextObject) {
+        std::optional<PendingAction> Action = TakePendingAction();
+        if (!Action.has_value())
+            return std::nullopt;
+        return ExecuteFindHunt(WorldContextObject, *Action);
     }
 
     void ResetQueue() {
-        {
-            std::lock_guard<std::mutex> Lock(PendingMutex);
-            Pending = {};
-        }
-        {
-            std::lock_guard<std::mutex> Lock(QueueMutex);
-            ActiveQueueHuntId.clear();
-            ActiveQueueHuntId.shrink_to_fit();
-            ActiveQueueAt = {};
-        }
+        std::scoped_lock Lock(PendingMutex, QueueMutex);
+        Pending.reset();
+        ActiveQueueAt.reset();
     }
 }
