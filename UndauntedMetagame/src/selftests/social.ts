@@ -8,6 +8,7 @@ const SocialControllerPath = require.resolve("../controllers/social");
 
 async function withSocialController(envValue: string | undefined, run: (social: SocialController) => Promise<void> | void) {
     const originalValue = process.env.SOCIAL_SESSION_IDLE_MS;
+    const originalSocialControllerModule = require.cache[SocialControllerPath];
     const restoreEnvironment = () => {
         if(originalValue == undefined){
             delete process.env.SOCIAL_SESSION_IDLE_MS;
@@ -32,7 +33,11 @@ async function withSocialController(envValue: string | undefined, run: (social: 
         await run(social);
     }
     finally {
-        social.StartSocialSessionSweep();
+        social.StopSocialSessionSweep();
+        delete require.cache[SocialControllerPath];
+        if(originalSocialControllerModule != undefined){
+            require.cache[SocialControllerPath] = originalSocialControllerModule;
+        }
         restoreEnvironment();
     }
 }

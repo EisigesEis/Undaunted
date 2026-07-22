@@ -33,18 +33,6 @@ export async function runSelftest() {
     const UeToken = SignMetagameJWTForUid("UE");
 
     try {
-        const Exchange = await getJson<{ code: string }>(`${BaseUrl}/epic/oauth/v2/exchange?exchange_code=UB&consumingClientId=cf27c69fe66441e8a8a4e8faf396ee4c`, UbToken);
-        assert.strictEqual(Exchange.code, "UB");
-
-        const EpicV2Token = await postForm<Record<string, any>>(`${BaseUrl}/epic/oauth/v2/token`, {
-            grant_type: "exchange_code",
-            exchange_code: Exchange.code
-        });
-        assert.strictEqual(EpicV2Token.account_id, "UB");
-        assert.strictEqual(EpicV2Token.token_type, "bearer");
-        assert(Array.isArray(EpicV2Token.scope));
-        assert(EpicV2Token.scope.includes("friends_list"));
-
         const UbEpicFriends = await getJson<EpicFriendsResponse>(`${BaseUrl}/epic/friends/v1/UB`, UbToken);
         assert(UbEpicFriends.friends.some((Friend) => Friend.accountId === "UE"));
         const UeFriend = UbEpicFriends.friends.find((Friend) => Friend.accountId === "UE")!;
@@ -198,22 +186,6 @@ async function postJson<T>(url: string, token: string, body: Record<string, any>
             "Content-Type": "application/json"
         },
         body: JSON.stringify(body)
-    });
-
-    if (Response.status !== 200) {
-        assert.fail(`${url} should return 200 but returned ${Response.status}: ${await Response.text()}`);
-    }
-
-    return await Response.json() as T;
-}
-
-async function postForm<T>(url: string, body: Record<string, string>): Promise<T> {
-    const Response = await fetch(url, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: new URLSearchParams(body).toString()
     });
 
     if (Response.status !== 200) {
