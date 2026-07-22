@@ -9,8 +9,17 @@ import { GetInventoryForUserIdAndCharacterId, RunInventoryTransaction, UpdateIns
 
 export async function runSelftest(){
     const Db = GetDb();
-    await Db.insert(users).values({userId: "inventory-user", name: "Inventory Test", notes: 0, isAdmin: false});
-    await Db.insert(characters).values({characterId: "inventory-character", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "test", updateVersion: 0, data: "{}"});
+    await Db.insert(users).values([
+        {userId: "inventory-user", name: "Inventory Test", notes: 0, isAdmin: false},
+        {userId: "inventory-other-user", name: "Other Inventory Test", notes: 0, isAdmin: false}
+    ]);
+    await Db.insert(characters).values([
+        {characterId: "inventory-character", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "test", updateVersion: 0, data: "{}"},
+        {characterId: "inventory-lazy-read", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "lazy read", updateVersion: 0, data: "{}"},
+        {characterId: "inventory-competing-reads", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "competing reads", updateVersion: 0, data: "{}"},
+        {characterId: "inventory-lazy-transaction", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "lazy transaction", updateVersion: 0, data: "{}"},
+        {characterId: "inventory-competing-writes", userId: "inventory-user", createdDate: "now", lastModifiedDate: "now", name: "competing writes", updateVersion: 0, data: "{}"}
+    ]);
     await Db.insert(inventory).values({
         characterId: "inventory-character",
         instancedItems: JSON.stringify([
@@ -116,6 +125,105 @@ export async function runSelftest(){
         itemData: "{\"CurrentLevel\":3}",
         updateVersion: 3
     });
+
+    const InventoryBeforeForbiddenOperations = await Db.query.inventory.findFirst({
+        where: (Inventories, {eq}) => eq(Inventories.characterId, "inventory-character")
+    });
+    assert(InventoryBeforeForbiddenOperations != undefined);
+
+    assert.deepStrictEqual(
+        await GetInventoryForUserIdAndCharacterId("inventory-other-user", "inventory-character"),
+        {success: false, error: "forbidden"}
+    );
+    assert.deepStrictEqual(
+        await RunInventoryTransaction("inventory-other-user", "inventory-character", "forbidden-transaction", [{
+            catalogId: "WP_FORBIDDEN",
+            instanceId: "forbidden-instance",
+            itemData: "{}",
+            updateVersion: 1
+        }], [], [], [], []),
+        {success: false, error: "forbidden"}
+    );
+    assert.deepStrictEqual(
+        await RunInventoryTransaction("inventory-other-user", "inventory-character", "forbidden-empty-transaction", [], [], [], [], []),
+        {success: false, error: "forbidden"}
+    );
+    assert.deepStrictEqual(
+        await UpdateInstancedItem("inventory-character", "inventory-other-user", "weapon-instance", "WP_TEST", "{\"CurrentLevel\":99}", 99),
+        {success: false, error: "forbidden"}
+    );
+
+    const InventoryAfterForbiddenOperations = await Db.query.inventory.findFirst({
+        where: (Inventories, {eq}) => eq(Inventories.characterId, "inventory-character")
+    });
+    assert.deepStrictEqual(InventoryAfterForbiddenOperations, InventoryBeforeForbiddenOperations);
+
+    const LazyRead = await GetInventoryForUserIdAndCharacterId("inventory-user", "inventory-lazy-read");
+    assert.deepStrictEqual(LazyRead, {
+        success: true,
+        data: {characterId: "inventory-lazy-read", instancedItems: [], stackedItems: []}
+    });
+    assert.deepStrictEqual(await Db.query.inventory.findFirst({
+        where: (Inventories, {eq}) => eq(Inventories.characterId, "inventory-lazy-read")
+    }), {
+        characterId: "inventory-lazy-read",
+        instancedItems: "[]",
+        stackedItems: "[]"
+    });
+
+    const CompetingReads = await Promise.all([
+        GetInventoryForUserIdAndCharacterId("inventory-user", "inventory-competing-reads"),
+        GetInventoryForUserIdAndCharacterId("inventory-user", "inventory-competing-reads")
+    ]);
+    assert.deepStrictEqual(CompetingReads, [
+        {success: true, data: {characterId: "inventory-competing-reads", instancedItems: [], stackedItems: []}},
+        {success: true, data: {characterId: "inventory-competing-reads", instancedItems: [], stackedItems: []}}
+    ]);
+    assert.strictEqual((await Db.query.inventory.findMany({
+        where: (Inventories, {eq}) => eq(Inventories.characterId, "inventory-competing-reads")
+    })).length, 1);
+
+    const LazyTransaction = await RunInventoryTransaction("inventory-user", "inventory-lazy-transaction", "lazy-transaction", [{
+        catalogId: "WP_LAZY",
+        instanceId: "lazy-instance",
+        itemData: "{}",
+        updateVersion: 1
+    }], [{catalogId: "CURRENCY_LAZY", quantity: 2}], [], [], []);
+    assert.strictEqual(LazyTransaction.success, true);
+    const LazyTransactionInventory = await GetInventoryForUserIdAndCharacterId("inventory-user", "inventory-lazy-transaction");
+    assert.strictEqual(LazyTransactionInventory.success, true);
+    assert.deepStrictEqual(LazyTransactionInventory.success && LazyTransactionInventory.data?.instancedItems, [{
+        accountId: "inventory-user",
+        catalogId: "WP_LAZY",
+        instanceId: "lazy-instance",
+        itemData: "{}",
+        updateVersion: 1
+    }]);
+    assert.deepStrictEqual(LazyTransactionInventory.success && LazyTransactionInventory.data?.stackedItems, [
+        {catalogId: "CURRENCY_LAZY", quantity: 2}
+    ]);
+
+    const CompetingWrites = await Promise.all([
+        RunInventoryTransaction("inventory-user", "inventory-competing-writes", "competing-write-a", [{
+            catalogId: "WP_COMPETING_A",
+            instanceId: "competing-a",
+            itemData: "{}",
+            updateVersion: 1
+        }], [], [], [], []),
+        RunInventoryTransaction("inventory-user", "inventory-competing-writes", "competing-write-b", [{
+            catalogId: "WP_COMPETING_B",
+            instanceId: "competing-b",
+            itemData: "{}",
+            updateVersion: 1
+        }], [], [], [], [])
+    ]);
+    assert(CompetingWrites.every((Result) => Result.success));
+    const CompetingInventory = await GetInventoryForUserIdAndCharacterId("inventory-user", "inventory-competing-writes");
+    assert.strictEqual(CompetingInventory.success, true);
+    assert.deepStrictEqual(
+        CompetingInventory.success && CompetingInventory.data?.instancedItems.map((Item) => Item.instanceId).sort(),
+        ["competing-a", "competing-b"]
+    );
 
     const server = http.createServer(app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

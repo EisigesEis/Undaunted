@@ -1,8 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { GetDb } from "../db";
-import { inventory } from "../db/schema";
+import { characters, inventory } from "../db/schema";
 import { logger } from "../logger";
-import { DoesCharacterBelongToUserId } from "./character";
 
 export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_item" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
@@ -48,6 +47,29 @@ function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInse
         characterId: CharacterId,
         instancedItems: "[]",
         stackedItems: "[]",
+    };
+}
+
+function GetOwnedCharacterInventory(Db: Pick<ReturnType<typeof GetDb>, "select">, UserId: string, CharacterId: string) {
+    const Row = Db
+        .select({
+            instancedItems: inventory.instancedItems,
+            stackedItems: inventory.stackedItems
+        })
+        .from(characters)
+        .leftJoin(inventory, eq(characters.characterId, inventory.characterId))
+        .where(and(eq(characters.characterId, CharacterId), eq(characters.userId, UserId)))
+        .get();
+
+    if(Row == undefined) {
+        return undefined;
+    }        
+
+    const {instancedItems, stackedItems} = Row;
+    return {
+        Inventory: instancedItems === null
+            ? undefined
+            : {characterId: CharacterId, instancedItems, stackedItems: stackedItems!}
     };
 }
 
@@ -145,14 +167,16 @@ function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, O
 }
 
 export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string | null | undefined, UpdateVersion: number): Promise<InventoryResult<any>>{
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
-        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
-        return {success: false, error: "forbidden"};
-    }
-
     try{
         return GetDb().transaction((tx) => {
-            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+            const CharacterInventory = GetOwnedCharacterInventory(tx, UserId, CharacterId);
+
+            if(CharacterInventory == undefined){
+                logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+                return {success: false, error: "forbidden"} as InventoryResult<any>;
+            }
+
+            let CurrentInventory = CharacterInventory.Inventory;
 
             if(CurrentInventory == undefined){
                 logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
@@ -225,21 +249,23 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         removedInstancedItems: [],
     };
 
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
-        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
-        return {success: false, error: "forbidden"};
-    }
-
     const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToSave.length > 0 || InstancedItemsToRemove.length > 0;
     const ShouldTouchStackedItems = StackedItemsToAdd.length > 0 || StackedItemsToRemove.length > 0;
 
-    if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
-        return {success: true, data: TransactionData};
-    }
-
     try{
-        GetDb().transaction((tx) => {
-            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+        return GetDb().transaction((tx) => {
+            const CharacterInventory = GetOwnedCharacterInventory(tx, UserId, CharacterId);
+
+            if(CharacterInventory == undefined){
+                logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+                return {success: false, error: "forbidden"} as InventoryResult<InventoryTransactionData>;
+            }
+
+            if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
+                return {success: true, data: TransactionData} as InventoryResult<InventoryTransactionData>;
+            }
+
+            let CurrentInventory = CharacterInventory.Inventory;
 
             if(CurrentInventory == undefined){
                 logger.info(`Creating inventory for characterId ${CharacterId}`)
@@ -353,6 +379,8 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             if(Object.keys(Update).length > 0){
                 tx.update(inventory).set(Update).where(eq(inventory.characterId, CharacterId)).run();
             }
+
+            return {success: true, data: TransactionData} as InventoryResult<InventoryTransactionData>;
         });
     }
     catch(error){
@@ -375,24 +403,33 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         return {success: false, error: "db_error"};
     }
 
-    return {success: true, data: TransactionData};
 }
 
 export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string): Promise<InventoryResult<{characterId: string, instancedItems: any[], stackedItems: any[]}>>{
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
-        return {success: false, error: "forbidden"};
-    }
-
     try{
         const Db = GetDb();
-        let InventoryFromDb = await Db.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+        const CharacterInventory = GetOwnedCharacterInventory(Db, UserId, CharacterId);
+
+        if(CharacterInventory == undefined){
+            return {success: false, error: "forbidden"};
+        }
+
+        let InventoryFromDb = CharacterInventory.Inventory;
 
         if(InventoryFromDb == undefined){
             logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
 
-            InventoryFromDb = MakeEmptyInventoryRow(CharacterId);
+            const EmptyInventory = MakeEmptyInventoryRow(CharacterId);
+            const CreatedInventory = Db.insert(inventory)
+                .values(EmptyInventory)
+                .onConflictDoNothing() // Another request created inventory after lookup, do not overwrite
+                .returning()
+                .get();
 
-            await Db.insert(inventory).values(InventoryFromDb);
+            InventoryFromDb = CreatedInventory ?? await Db.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+            if(InventoryFromDb == undefined){
+                throw new Error(`Inventory creation did not produce a row for characterId ${CharacterId}`);
+            }
         }
 
         const {instancedItems: StoredInstancedItems, stackedItems: StackedItems} = DecodeInventory(InventoryFromDb);
