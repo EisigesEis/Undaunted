@@ -151,6 +151,7 @@
     <ClInclude Include="constants.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Networking.h" />
+    <ClInclude Include="Networking\NetworkLifecycle.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
@@ -160,6 +161,7 @@
     <ClCompile Include="MinHook\hook.c" />
     <ClCompile Include="MinHook\trampoline.c" />
     <ClCompile Include="Networking.cpp" />
+    <ClCompile Include="Networking\NetworkLifecycle.cpp" />
     <ClCompile Include="SDK\Archon_functions.cpp" />
     <ClCompile Include="SDK\Basic.cpp" />
     <ClCompile Include="SDK\BPGM_Archon_Prototype_functions.cpp" />
