@@ -1,7 +1,6 @@
 packages:
   - "UndauntedMetagame"
   - "UndauntedDeployServer"
-confirmModulesPurge: false
 allowBuilds:
   better-sqlite3: true
   esbuild: true
