@@ -2,6 +2,7 @@ import { Router } from "express";
 import { logger } from "../logger";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import progressionconfig from "../vendor/progression_config.json";
+import { ACTIVE_HUNTPASS, GetActiveCooldowns, GetEntitlements, StartCooldown } from "../controllers/huntpass";
 import { UpdatePlayerActivity } from "../controllers/undauntedapi";
 import { MarkMatchmakingHeartbeat, TouchDeployserverForPlayerActivity } from "../controllers/matchmaking";
 
@@ -99,26 +100,13 @@ systemRouter.post("/motd/", HasUndauntedMetagameAuth, (req, res) => {
 	res.send();
 });
 
-systemRouter.get("/entitlementsv2", HasUndauntedMetagameAuth, (req, res) => {
-	logger.info("Entitlements (stubbed)");
-
-	res.status(200);
-	res.json({
-		code: null,
-		message: "OK",
-		payload: []
-	});
+systemRouter.get("/entitlementsv2", HasUndauntedMetagameAuth, async (req: any, res) => {
+	res.status(200).json({code: null, message: "OK", payload: await GetEntitlements(req.AuthData.userId)});
 });
 
-systemRouter.post("/entitlementv2/:userId", HasUndauntedMetagameAuth, (req, res) => {
-	logger.info("Entitlements (stubbed)");
-
-	res.status(200);
-	res.json({
-		code: null,
-		message: "OK",
-		payload: []
-	});
+systemRouter.post("/entitlementv2/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+	if(!req.AuthData.IsGameserver && req.AuthData.userId !== req.params.userId) return res.status(403).send();
+	res.status(200).json({code: null, message: "OK", payload: await GetEntitlements(req.params.userId)});
 });
 
 systemRouter.get("/playertreatments/:userId", HasUndauntedMetagameAuth, (req, res) => {
@@ -148,43 +136,60 @@ systemRouter.get("/progression/config", HasUndauntedMetagameAuth, (req, res) => 
 	res.json(progressionconfig);
 });
 
+function OwnsAccount(req: any, res: any) {
+	if(req.AuthData.IsGameserver || req.AuthData.userId === req.params.userId) return true;
+	res.status(403).send();
+	return false;
+}
+
+function RequestedHuntPass(body: any) {
+	if(typeof body === "string") return body;
+	return body?.hunt_pass_id ?? body?.huntPassId ?? body?.selected_hunt_pass_id ?? body?.progression_id;
+}
+
 systemRouter.get("/huntpass/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-	logger.info("Huntpass (stubbed)");
-
-	res.status(200);
-	res.json({
-        code: null,
-        message: "OK",
-        payload: "season09b"
-    });
+	if(!OwnsAccount(req, res)) return;
+	res.status(200).json({code: null, message: "OK", payload: ACTIVE_HUNTPASS});
 });
 
-// TODO: Cooldowns might be gameplay-important, impl if so
+systemRouter.post("/huntpass/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
+	if(!OwnsAccount(req, res)) return;
+	const HuntPassId = RequestedHuntPass(req.body);
+	if(HuntPassId !== ACTIVE_HUNTPASS){
+		return res.status(400).json({code: "invalid_huntpass", message: "Unknown hunt pass", payload: null});
+	}
+	res.status(200).json({code: null, message: "OK", payload: ACTIVE_HUNTPASS});
+});
 
-systemRouter.get("/cooldown/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-	logger.info("Cooldowns (stubbed)");
+// TODO: So far cooldown is only hp daily ramsgate 10 items to collect. Verify this.
+systemRouter.get("/cooldown/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+	if(!req.AuthData.IsGameserver && req.AuthData.userId !== req.params.userId) return res.status(403).send();
+	res.status(200).json({code: null, message: "OK", payload: await GetActiveCooldowns(req.params.userId)});
+});
 
-	res.status(200);
-	res.json({
-		code: null,
-		message: "OK",
-		payload: {
+systemRouter.put("/cooldown/batch/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+	if(req.AuthData.IsGameserver !== true) return res.status(403).send();
+	const Ids = Array.isArray(req.body?.cooldowns) ? req.body.cooldowns : [];
+	for(const Entry of Ids) StartCooldown(req.params.userId, String(Entry.cooldown_id ?? Entry.cooldownId ?? Entry));
+    res.status(200).json({code: null, message: "OK", payload: await GetActiveCooldowns(req.params.userId)});
+});
 
-		}
+systemRouter.put("/cooldown/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+	if(req.AuthData.IsGameserver !== true) return res.status(403).send();
+	const Entry = req.body?.cooldown ?? req.body;
+	const CooldownId = typeof Entry === "string" ? Entry : String(Entry?.cooldown_id ?? Entry?.cooldownId ?? Entry?.id ?? "");
+	const Result = StartCooldown(req.params.userId, CooldownId);
+	res.status(Result.success ? 200 : 400).json({
+		code: Result.success ? null : Result.error,
+		message: Result.success ? "OK" : Result.error,
+		payload: Result.success ? await GetActiveCooldowns(req.params.userId) : null
 	});
 });
 
-systemRouter.put("/cooldown/batch/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-	logger.info("Add Cooldowns (stubbed)");
-
-	res.status(200);
-	res.json({
-		code: null,
-		message: "OK",
-		payload: {
-
-		}
-	});
+systemRouter.put("/cooldown/:userId/:cooldownId", HasUndauntedMetagameAuth, (req: any, res) => {
+    if(req.AuthData.IsGameserver !== true) return res.status(403).send();
+    const Result = StartCooldown(req.params.userId, req.params.cooldownId);
+    res.status(Result.success ? 200 : 400).json({code: Result.success ? null : Result.error, message: Result.success ? "OK" : Result.error, payload: Result.success ? {expires_at: Result.expiresAt} : null});
 });
 
 systemRouter.get("/bounty/game-data", HasUndauntedMetagameAuth, (req: any, res) => {

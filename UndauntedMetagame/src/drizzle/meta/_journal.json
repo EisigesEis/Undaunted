@@ -99,6 +99,13 @@
       "when": 1784376000000,
       "tag": "0013_mastery_progression",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1784383200000,
+      "tag": "0014_huntpass_cooldowns",
+      "breakpoints": true
     }
   ]
 }

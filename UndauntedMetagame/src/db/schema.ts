@@ -126,3 +126,16 @@ export const progressionobjectives = sqliteTable("progressionobjectives", {
     lastModifiedDate: text("lastModifiedDate").notNull()
 }, (table) => ({ pk: primaryKey({ columns: [table.userId, table.objectiveId] }) }));
 
+export const cooldowns = sqliteTable("cooldowns", {
+    userId: text("userId").notNull(),
+    cooldownId: text("cooldownId").notNull(),
+    expiresAt: text("expiresAt").notNull(),
+    createdDate: text("createdDate").notNull(),
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.cooldownId] }) }));
+
+export const entitlements = sqliteTable("entitlements", {
+    userId: text("userId").notNull(),
+    entitlement: text("entitlement").notNull(),
+    grantedDate: text("grantedDate").notNull(),
+    expiresAt: text("expiresAt"),
+}, (table) => ({ pk: primaryKey({ columns: [table.userId, table.entitlement] }) }));
