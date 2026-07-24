@@ -3,6 +3,7 @@ import { logger } from "../logger";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import progressionconfig from "../vendor/progression_config.json";
 import { UpdatePlayerActivity } from "../controllers/undauntedapi";
+import { MarkMatchmakingHeartbeat, TouchDeployserverForPlayerActivity } from "../controllers/matchmaking";
 
 export const systemRouter = Router();
 
@@ -28,6 +29,8 @@ systemRouter.post("/heartbeat", HasUndauntedMetagameAuth, async (req: any, res) 
 	const UserMap = req.body.map;
 
 	await UpdatePlayerActivity(UserId, UserMap);
+	await MarkMatchmakingHeartbeat(UserId);
+	await TouchDeployserverForPlayerActivity(UserId);
 
     res.status(200).type("text/plain").send("20000");
 });
@@ -35,6 +38,34 @@ systemRouter.post("/heartbeat", HasUndauntedMetagameAuth, async (req: any, res) 
 systemRouter.post("/event", (req, res) => {
     res.status(200);
     res.json({});
+});
+
+systemRouter.post("/check", (req, res) => {
+	logger.info("Chat check (stubbed)");
+	const Original = typeof req.body?.string === "string"
+		? req.body.string
+		: typeof req.body?.text === "string"
+			? req.body.text
+			: typeof req.body?.message === "string"
+				? req.body.message
+				: "";
+
+	res.status(200);
+	res.json({
+		rating: 0.0,
+		sanitized: Original,
+		string: Original
+	});
+});
+
+systemRouter.all("/checkavailable", (req, res) => {
+	logger.info("Availability check (stubbed)");
+
+	res.status(200);
+	res.json({
+		available: true,
+		isAvailable: true
+	});
 });
 
 systemRouter.post("/account/migrate", HasUndauntedMetagameAuth, (req, res) => {

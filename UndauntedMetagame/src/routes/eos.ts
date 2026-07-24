@@ -1,10 +1,51 @@
 import { Router } from "express";
 import { logger } from "../logger";
-import { CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
-import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
-import { GetUsernameForUserId } from "../controllers/login";
+import { CreateEpicOAuthV2TokenResponseForUid, CreateMetagameOAuthTokenResponseForUid, GetUserIDForAPIKey, RevokeRefreshToken, RotateRefreshToken, ValidateMetagameJWTAndGetPayload } from "../controllers/auth";
+import { BuildExternalAuths, BuildPublicAccountPayload, BuildSdkAccountPayload, DoesCanonicalAccountExist, FindCanonicalAccountIdByDisplayName, GetCanonicalDisplayNameForAccountId } from "../controllers/accountProfile";
 
 export const eosRouter = Router();
+
+eosRouter.get("/epic/oauth/v2/exchange", async (req, res) => {
+    const UserId = await ResolveOAuthUserId(req.query.exchange_code ?? req.query.code ?? req.query.user_id);
+    if (UserId == undefined) {
+        logger.warn({
+            query: req.query
+        }, "Epic OAuth exchange request could not resolve user");
+        res.status(400).json({ error: "invalid_exchange_code" });
+        return;
+    }
+
+    logger.info({
+        userId: UserId,
+        consumingClientId: req.query.consumingClientId
+    }, "Epic OAuth exchange response");
+
+    res.json({
+        code: UserId
+    });
+});
+
+eosRouter.post("/epic/oauth/v2/token", async (req, res) => {
+    const UserId = await ResolveOAuthUserId(req.body?.exchange_code ?? req.body?.code ?? req.body?.refresh_token);
+    if (UserId == undefined) {
+        logger.warn({
+            grantType: req.body?.grant_type
+        }, "Epic OAuth v2 token request could not resolve user");
+        res.status(400).json({ error: "invalid_grant" });
+        return;
+    }
+
+    const DisplayName = await GetCanonicalDisplayNameForAccountId(UserId);
+    const TokenResponse = CreateEpicOAuthV2TokenResponseForUid(UserId, DisplayName);
+
+    logger.info({
+        userId: UserId,
+        displayName: DisplayName,
+        grantType: req.body?.grant_type
+    }, "Epic OAuth v2 token response");
+
+    res.json(TokenResponse);
+});
 
 eosRouter.post("/account/api/oauth/token", async (req, res) => {
     if(req.body.grant_type === "refresh_token"){
@@ -90,6 +131,22 @@ eosRouter.post("/account/api/oauth/token", async (req, res) => {
     }
 });
 
+async function ResolveOAuthUserId(value: unknown) {
+    if (typeof value === "string" && value.length > 0) {
+        const UserIdFromApiKey = await GetUserIDForAPIKey(value);
+        if(UserIdFromApiKey != undefined){
+            return UserIdFromApiKey;
+        }
+
+        const IsDevBypassEnabled = process.env.AUTH_MODE === "NONE" && process.env.NODE_ENV !== "production";
+        if(IsDevBypassEnabled){
+            return value;
+        }
+    }
+
+    return undefined;
+}
+
 eosRouter.get("/account/api/oauth/verify", (req, res) => {
     logger.info("Verifying token");
 
@@ -123,16 +180,73 @@ eosRouter.get("/account/api/oauth/verify", (req, res) => {
     }
 });
 
-eosRouter.get("/account/api/public/account/:AccId", (req, res) => {
-    logger.info("EOS Account Info (stubbed)");
+eosRouter.get("/account/api/public/account/displayName/:DisplayName", async (req, res) => {
+    const RawDisplayName = req.params.DisplayName;
+    let DisplayName: string;
+    try {
+        DisplayName = decodeURIComponent(RawDisplayName);
+    }
+    catch {
+        res.status(400).json({ errorCode: "errors.com.epicgames.account.invalid_display_name" });
+        return;
+    }
 
-    res.json({});
+    const AccountId = await FindCanonicalAccountIdByDisplayName(DisplayName);
+    logger.info({ rawDisplayName: RawDisplayName, displayName: DisplayName, accountId: AccountId }, "EOS account display-name lookup");
+    if (AccountId == undefined) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
+
+    res.json(await BuildPublicAccountPayload(AccountId));
 });
 
-eosRouter.get("/account/api/public/account/:AccId/externalAuths", (req, res) => {
-    logger.info("External Auths (stubbed)");
+eosRouter.get("/account/api/public/account/:AccId", async (req, res) => {
+    const AccountId = req.params.AccId;
 
-    res.json({});
+    logger.info(`EOS Account Info for ${AccountId}`);
+
+    if (!await DoesCanonicalAccountExist(AccountId)) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
+
+    res.json(await BuildPublicAccountPayload(AccountId));
+});
+
+eosRouter.get("/account/api/public/account/:AccId/externalAuths", async (req, res) => {
+    const AccountId = req.params.AccId;
+    if (!await DoesCanonicalAccountExist(AccountId)) {
+        res.status(404).json({ errorCode: "errors.com.epicgames.account.account_not_found" });
+        return;
+    }
+    const DisplayName = await GetCanonicalDisplayNameForAccountId(AccountId);
+
+    logger.info({
+        accountId: AccountId,
+        displayName: DisplayName
+    }, "EOS external auths");
+
+    res.json(BuildExternalAuths(AccountId, DisplayName));
+});
+
+eosRouter.get("/epic/id/v2/sdk/accounts", async (req, res) => {
+    const AccountIds = Array.isArray(req.query.accountId)
+        ? req.query.accountId
+        : req.query.accountId != undefined
+            ? [req.query.accountId]
+            : [];
+
+    logger.info(`EOS SDK account lookup for ${AccountIds.length} account(s)`);
+
+    const ExistingAccountIds = (await Promise.all(AccountIds
+        .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
+        .map(async (AccountId) => await DoesCanonicalAccountExist(AccountId) ? AccountId : undefined)))
+        .filter((AccountId): AccountId is string => AccountId != undefined);
+    const Accounts = await Promise.all(ExistingAccountIds
+        .map((AccountId) => BuildSdkAccountPayload(AccountId)));
+
+    res.json(Accounts);
 });
 
 eosRouter.delete("/account/api/oauth/sessions/kill", async (req, res) => {
@@ -153,30 +267,52 @@ eosRouter.delete("/account/api/oauth/sessions/kill/:AuthToken", async (req, res)
     res.json({});
 })
 
-eosRouter.get("/account/api/public/account", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const UserId = req.AuthData.userId;
-    const Username = await GetUsernameForUserId(UserId);
+eosRouter.get("/account/api/public/account", async (req: any, res) => {
+    const AccountIds = ExtractAccountIds(req.query.accountId);
+
+    if (AccountIds.length > 0) {
+        const ExistingAccountIds = (await Promise.all(AccountIds.map(async (AccountId) =>
+            await DoesCanonicalAccountExist(AccountId) ? AccountId : undefined
+        ))).filter((AccountId): AccountId is string => AccountId != undefined);
+        const Accounts = await Promise.all(ExistingAccountIds.map((AccountId) => BuildPublicAccountPayload(AccountId)));
+        logger.info({ requestedAccountIds: AccountIds, resolvedAccountIds: ExistingAccountIds }, "EOS public bulk account lookup");
+        res.json(Accounts);
+        return;
+    }
+
+    const UserId = GetUserIdFromBearer(req.headers.authorization);
+    if (UserId == undefined) {
+        res.status(400).json({ error: "missing_account_id" });
+        return;
+    }
 
     logger.info(`Account info for userId ${UserId}`);
 
-    res.json({
-        "id": UserId,
-        "displayName": Username,
-        "name": "",
-        "lastName": "",
-        "email": "",
-        "failedLoginAttempts": 0,
-        "lastLogin": new Date().toISOString(),
-        "numberOfDisplayNameChanges": 0,
-        "ageGroup": "ADULT",
-        "headless": false,
-        "country": "US",
-        "lastNameChange": new Date().toISOString(),
-        "preferredLanguage": "en",
-        "canUpdateDisplayName": false,
-        "tfaEnabled": false,
-        "emailVerified": true,
-        "minorVerified": false,
-        "minorStatus": "NOT_MINOR"
-    });
+    res.json(await BuildPublicAccountPayload(UserId));
 });
+
+function ExtractAccountIds(accountIdQuery: unknown) {
+    if (Array.isArray(accountIdQuery)) {
+        return accountIdQuery.filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0);
+    }
+
+    if (typeof accountIdQuery === "string" && accountIdQuery.length > 0) {
+        return [accountIdQuery];
+    }
+
+    return [];
+}
+
+function GetUserIdFromBearer(authHeader: unknown) {
+    if (typeof authHeader !== "string" || !authHeader.toLowerCase().startsWith("bearer ")) {
+        return undefined;
+    }
+
+    try {
+        const Payload = ValidateMetagameJWTAndGetPayload(authHeader.slice("bearer ".length)) as any;
+        return typeof Payload.userId === "string" ? Payload.userId : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}

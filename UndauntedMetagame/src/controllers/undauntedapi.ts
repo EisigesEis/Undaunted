@@ -4,6 +4,7 @@ import { GetUserIDForAPIKey, HashUserAPIKey, RegisterUserAPIKeyHash } from "./au
 import { invitecodes, users } from "../db/schema";
 import { and, eq, gt, or, sql } from "drizzle-orm";
 import { RememberUsernameForUserId } from "./login";
+import { BuildSocialEvent, EmitSocialEvent } from "./social";
 
 const AUTH_MODE = process.env.AUTH_MODE;
 const NODE_ENV = process.env.NODE_ENV;
@@ -161,6 +162,7 @@ export async function UpdatePlayerActivity(UserId: string, Map: string){
         Map: Map,
         LastUpdatedTime: Date.now()
     });
+    EmitSocialEvent(BuildSocialEvent("presence.updated", UserId, true, "activity"));
 }
 
 export async function UpdatePlayerLocation(UserId: string, HuntId: string){
@@ -168,6 +170,7 @@ export async function UpdatePlayerLocation(UserId: string, HuntId: string){
         HuntId: HuntId,
         EnteredTime: Date.now()
     });
+    EmitSocialEvent(BuildSocialEvent("presence.updated", UserId, true, "activity"));
 }
 
 export async function UpdatePlayerMatchmakingActivity(UserId: string, Activity: Omit<PlayerMatchmakingActivity, "UpdatedTime">){
@@ -175,20 +178,24 @@ export async function UpdatePlayerMatchmakingActivity(UserId: string, Activity: 
         ...Activity,
         UpdatedTime: Date.now()
     });
+    EmitSocialEvent(BuildSocialEvent("presence.updated", UserId, true, "activity"));
 }
 
 export async function GetRecentPlayerData(){
     let PlayerDataToReturn: PlayerData[] = [];
     const RecentPlayerIds = new Set<string>();
+    const KnownUserIds = new Set(
+        (await GetDb().select({ userId: users.userId }).from(users)).map((User) => User.userId)
+    );
 
     PlayerActivityMap.forEach((value, key, map) => {
-        if(Date.now() - value.LastUpdatedTime <= 90 * 1000){ // If entry is < 90s old
+        if(KnownUserIds.has(key) && Date.now() - value.LastUpdatedTime <= 90 * 1000){ // If entry is < 90s old
             RecentPlayerIds.add(key);
         }
     });
 
     PlayerMatchmakingActivityMap.forEach((value, key, map) => {
-        if(Date.now() - value.UpdatedTime <= 5 * 60 * 1000){
+        if(KnownUserIds.has(key) && Date.now() - value.UpdatedTime <= 5 * 60 * 1000){
             RecentPlayerIds.add(key);
         }
     });

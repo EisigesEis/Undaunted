@@ -4,11 +4,16 @@ import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth
 import { GetDb } from "../db";
 import { users } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { GetUsernameForUserId } from "../controllers/login";
+import { GetDisplayUsernameForUserId, GetUsernameForUserId } from "../controllers/login";
+import { BuildCanonicalAccountIdentity } from "../controllers/accountProfile";
+import { BuildLegacyArchonAccountData, BuildLegacyArchonFriendsSave } from "../controllers/friends";
+import { ClearPlayerPartyForFreshLogin } from "../controllers/party";
+import { CancelNonReadyMatchmakingForFreshLogin } from "../controllers/matchmaking";
+import { GetUserIDForAPIKey, SignMetagameJWTForUid } from "../controllers/auth";
 
 export const loginRouter = Router();
 
-loginRouter.get("/features/platform/win", (req, res) => {
+loginRouter.get("/features/platform/:platform", (req, res) => {
     logger.info("Features");
 
     res.send({
@@ -33,6 +38,39 @@ loginRouter.get("/account/link/epic/:AccId", (req, res) => {
     });
 });
 
+// The game exchanges the launcher API key for its session token here.
+loginRouter.post("/game/login", async (req, res) => {
+    const Password = req.body?.password;
+    if(typeof Password !== "string" || Password.length === 0){
+        logger.warn("Phoenix bootstrap login request had no API key");
+        res.status(400).json({ error: "invalid_credentials" });
+        return;
+    }
+
+    const UserId = await GetUserIDForAPIKey(Password);
+    if(UserId == undefined){
+        logger.warn("Phoenix bootstrap login request had an invalid API key");
+        res.status(401).json({ error: "invalid_credentials" });
+        return;
+    }
+
+    let DisplayName: string;
+    try{
+        DisplayName = await GetDisplayUsernameForUserId(UserId);
+    }
+    catch (error) {
+        logger.error({ error, userId: UserId }, "Failed to resolve display name for game login user");
+        res.status(500).json({ error: "internal_error" });
+        return;
+    }
+
+    res.json({
+        displayName: DisplayName,
+        accountId: UserId,
+        token: SignMetagameJWTForUid(UserId)
+    });
+});
+
 loginRouter.post("/login", HasUndauntedMetagameAuth, async (req: any, res) => {
     if(req.AuthData.userId !== req.body.email){
         res.status(400);
@@ -54,7 +92,23 @@ loginRouter.post("/login", HasUndauntedMetagameAuth, async (req: any, res) => {
         return;
     }
 
-    logger.info(`${req.body.email} is logging in!`);
+    const PartyCleanup = ClearPlayerPartyForFreshLogin(req.AuthData.userId);
+    const MatchmakingCleanup = await CancelNonReadyMatchmakingForFreshLogin(req.AuthData.userId);
+
+    const CleanupLog = {
+        userId: req.AuthData.userId,
+        removedFromParty: PartyCleanup.removedFromParty,
+        partyId: PartyCleanup.partyId,
+        cancelledMatchmaking: MatchmakingCleanup.cancelled,
+        candidateId: MatchmakingCleanup.candidateId,
+        matchmakingPhase: MatchmakingCleanup.phase
+    };
+    if(PartyCleanup.removedFromParty || MatchmakingCleanup.cancelled){
+        logger.info(CleanupLog, "Player login session cleanup");
+    }
+    else{
+        logger.debug(CleanupLog, "Player login session cleanup");
+    }
 
     res.json({
         "error_code": "TicketRateOk",
@@ -69,12 +123,18 @@ loginRouter.get("/accountinfo", HasUndauntedMetagameAuth, async (req: any, res) 
     logger.info("Account info")
 
     const Username = await GetUsernameForUserId(req.AuthData.userId);
+    const LegacyData = await BuildLegacyArchonAccountData(req.AuthData.userId);
 
     res.json({
         "accountId" : req.AuthData.userId,
         "creationDate" : "2000-01-01 00:00:00",
+        "createdDate" : "2000-01-01",
+        "data": LegacyData,
         "email" : null,
+        "id": req.AuthData.userId,
+        "name": Username,
         "preferredLanguage" : null,
+        "updateVersion": 0,
         "username" : Username,
         "verified" : true
     });
@@ -90,46 +150,114 @@ loginRouter.get("/tags", HasUndauntedMetagameAuth, (req: any, res) => {
 });
 
 loginRouter.put("/gamesession/epic", HasUndauntedMetagameAuth, (req: any, res) => {
-    const AuthHeader = req.headers.authorization;
+    const Token = GetBearerToken(req.headers.authorization);
+    if(Token == undefined){
+        res.status(401);
+        res.send();
+        return;
+    }
 
-    const Token = AuthHeader.slice("bearer ".length);
-
-    // A note on auth tokens:
-    // The original flow went Epic Launcher -> Epic -> PHX
-    // With each step having it's own auth token.
-    // Since this is unneeded complexity for us, we just use the same token for all 3
-    // Hence this echo endpoint
+    // We reuse the launcher token for the game session.
 
     res.json({
         "code": null,
         "message": "OK",
         "payload": {
             "error_code": null,
-            "sessionid": "SESSION_ID_LOL", // TODO: This is surfaced in the UI, but I don't think it matters for anything else
+            "sessionid": `undaunted-${req.AuthData.userId}`,
             "sessionToken": Token 
         }
     })
 });
 
+function GetBearerToken(authHeader: unknown) {
+    if(typeof authHeader !== "string"){
+        return undefined;
+    }
+
+    const SpaceIndex = authHeader.indexOf(" ");
+    if(SpaceIndex <= 0){
+        return undefined;
+    }
+
+    const Scheme = authHeader.slice(0, SpaceIndex).toLowerCase();
+    if(Scheme !== "bearer"){
+        return undefined;
+    }
+
+    const Token = authHeader.slice(SpaceIndex + 1).trim();
+    return Token.length > 0 ? Token : undefined;
+}
+
 loginRouter.post("/accountinfo/public", HasUndauntedMetagameAuth, async (req: any, res) => {
     const AccountIdToLookupFromRequest = req.body.accountId;
-    const RequestorAccountId = req.AuthData.userId;
 
-    const Username = await GetUsernameForUserId(AccountIdToLookupFromRequest);
+    const Identity = await BuildCanonicalAccountIdentity(AccountIdToLookupFromRequest);
+    const AuthUserId = typeof req.AuthData?.userId === "string" ? req.AuthData.userId : undefined;
+    const AdditionalSelfIds = AuthUserId != undefined && AuthUserId !== Identity.accountId ? [AuthUserId] : [];
+    const LegacyData = await BuildLegacyArchonAccountData(Identity.accountId, AdditionalSelfIds);
+    const FriendsSave = await BuildLegacyArchonFriendsSave(Identity.accountId, AdditionalSelfIds);
 
-    // We allow anybody to look up anybody's username from account id
+    // Account names are public on this server.
 
     res.status(200);
     res.json({
-        accountId: RequestorAccountId,
+        accountId: Identity.accountId,
+        catalogDaoId: null,
+        createdDate: "2000-01-01",
+        data: LegacyData,
+        Friends: FriendsSave,
+        id: Identity.accountId,
+        displayName: Identity.displayName,
         isSubscribed: true,
-        language: null,
+        language: Identity.preferredLanguage,
+        lastModifiedDate: "2000-01-01",
         linkedAccounts: [
+            ...Identity.linkedAccounts.map((Account) => ({
+                accountId: Account.accountId,
+                accountType: Account.identityProviderId,
+                displayName: Account.displayName
+            })),
             {
-                accountId: RequestorAccountId,
-                accountType: "epic"
+                accountId: Identity.accountId,
+                accountType: "phoenix",
+                displayName: Identity.displayName
             }
         ],
-        username: Username
+        name: Identity.displayName,
+        updateVersion: 0,
+        username: Identity.displayName
+    });
+});
+
+loginRouter.post("/account/mapping", HasUndauntedMetagameAuth, async (req: any, res) => {
+    const RequestedIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const SourceAccountType = typeof req.body?.srcAccountType === "string" ? req.body.srcAccountType : "epic";
+    const TargetAccountType = SourceAccountType.toLowerCase() === "phoenix" ? "epic" : "phoenix";
+
+    const Entries = await Promise.all(RequestedIds
+        .filter((AccountId): AccountId is string => typeof AccountId === "string" && AccountId.length > 0)
+        .map(async (AccountId) => {
+            const Identity = await BuildCanonicalAccountIdentity(AccountId);
+            return [
+                AccountId,
+                {
+                    accountId: Identity.accountId,
+                    accountType: TargetAccountType,
+                    displayName: Identity.displayName,
+                    username: Identity.displayName,
+                    externalAuthType: TargetAccountType,
+                    externalDisplayName: Identity.displayName
+                }
+            ] as const;
+        }));
+    const AccountMappings = Object.fromEntries(Entries);
+
+    logger.info(`Account mapping ${SourceAccountType} -> ${TargetAccountType} for ${Object.keys(AccountMappings).length} account(s)`);
+
+    res.status(200);
+    res.json({
+        accountMappings: AccountMappings,
+        sourceAccountType: SourceAccountType
     });
 });

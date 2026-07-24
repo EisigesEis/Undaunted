@@ -28,6 +28,9 @@
     <Filter Include="Networking\Private">
       <UniqueIdentifier>{c8bd8110-1948-4a08-a1f2-8d14d2b9d30e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="TrialsBrowser">
+      <UniqueIdentifier>{0f7f0f2e-e5f3-4f9c-9310-544db1969328}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AssetOptimization.h">
@@ -59,6 +62,18 @@
     <ClInclude Include="Networking\Private\ReplicationScheduler.inl"><Filter>Networking\Private</Filter></ClInclude>
     <ClInclude Include="Networking\Private\ListenDispatch.inl"><Filter>Networking\Private</Filter></ClInclude>
     <ClInclude Include="Networking\CombatBridge.inl"><Filter>Networking</Filter></ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserData.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserOverlay.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserPaint.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
+    <ClInclude Include="TrialsBrowser\TrialsBrowserQueue.h">
+      <Filter>TrialsBrowser</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AssetOptimization.cpp">
@@ -122,6 +137,18 @@
     </ClCompile>
     <ClCompile Include="SDK\BPGM_Archon_Prototype_functions.cpp">
       <Filter>SDK</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserOverlay.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserData.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserPaint.cpp">
+      <Filter>TrialsBrowser</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialsBrowser\TrialsBrowserQueue.cpp">
+      <Filter>TrialsBrowser</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

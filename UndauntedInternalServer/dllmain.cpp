@@ -26,6 +26,7 @@
 #include "ServerPerformance.h"
 #include "ServerPacing.h"
 #include "Hooks/NativeNameCleanup.h"
+#include "TrialsBrowser/TrialsBrowserOverlay.h"
 
 #include "SDK/GameplayAbilities_parameters.hpp"
 #include "SDK/Archon_parameters.hpp"
@@ -1007,6 +1008,12 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
 
     SDK::UWorld* World = SDK::UWorld::GetWorld();
 
+    if (!Globals::AmServer) {
+        TrialsBrowserOverlay::Tick(World != nullptr
+            ? static_cast<UObject*>(World)
+            : static_cast<UObject*>(GameEngine));
+    }
+
     if (Globals::AmServer && !DedicatedServerFrameCap::Tick()) {
         if (DedicatedServerFrameCap::Failed()) {
             AssetOptimization::Metrics Metrics = AssetOptimization::MakeSkipped(
@@ -1522,6 +1529,8 @@ void InitClientHooks() {
     if constexpr (ClientHookConfig::kEnableNativeNameCleanup) {
         NativeNameCleanup::Init();
     }
+
+    TrialsBrowserOverlay::Start();
 
    // MH_CreateHook((void*)(Globals::BaseAddress + 0x3077710), GetActorCallspace, &OrigGetActorCallspace);
 

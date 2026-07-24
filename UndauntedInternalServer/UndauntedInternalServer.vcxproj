@@ -158,6 +158,10 @@
     <ClInclude Include="Networking\NetworkLifecycle.h" />
     <ClInclude Include="ServerPacing.h" />
     <ClInclude Include="ServerPerformance.h" />
+    <ClInclude Include="TrialsBrowser\TrialsBrowserData.h" />
+    <ClInclude Include="TrialsBrowser\TrialsBrowserOverlay.h" />
+    <ClInclude Include="TrialsBrowser\TrialsBrowserPaint.h" />
+    <ClInclude Include="TrialsBrowser\TrialsBrowserQueue.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AssetOptimization.cpp" />
@@ -182,6 +186,10 @@
     <ClCompile Include="SDK\Engine_functions.cpp" />
     <ClCompile Include="SDK\GameplayAbilities_functions.cpp" />
     <ClCompile Include="SDK\island_arrival_cinematic_trigger_bp_functions.cpp" />
+    <ClCompile Include="TrialsBrowser\TrialsBrowserData.cpp" />
+    <ClCompile Include="TrialsBrowser\TrialsBrowserOverlay.cpp" />
+    <ClCompile Include="TrialsBrowser\TrialsBrowserPaint.cpp" />
+    <ClCompile Include="TrialsBrowser\TrialsBrowserQueue.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
