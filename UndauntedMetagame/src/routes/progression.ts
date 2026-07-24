@@ -2,10 +2,28 @@ import { Router } from "express";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
 import { logger } from "../logger";
 import { AddEncounteredContent, GetBreadcrumbsForCharacterIdAndUserId, ProgressionError, QueryEncounteredContent, SetBreadcrumbsForCharacterIdAndUserId } from "../controllers/progression";
-
-// TODO: We will be gaining progression support very soon, but for now just a stub
+import progressionConfig from "../vendor/progression_config.json";
+import { ApplyMasteryUpdate, ApplyTrackGrant, ConfiguredTrackIds, ConfirmTrack, DeleteTrack, Envelope, GetMasteryUpdateResponse, GetObjectives, GetTracks, MasteryTrackEvent, MasteryUpdate, TrackWire, ZeroObjectiveWire, ZeroTrackWire } from "../controllers/mastery";
+import { ACTIVE_HUNTPASS, ClaimHuntPass } from "../controllers/huntpass";
 
 export const progressionRouter = Router();
+
+const ConfiguredTrackIdSet = new Set(
+    (progressionConfig.payload.paths as { progression_id: string }[]).map((path) => path.progression_id)
+);
+
+function ValidateTrackPayload(payload: unknown): payload is { progression_id: string }[] {
+    if (!Array.isArray(payload) || ConfiguredTrackIdSet.size === 0)
+        return false;
+
+    const returned = new Set<string>();
+    for (const track of payload) {
+        if (typeof track?.progression_id !== "string")
+            return false;
+        returned.add(track.progression_id);
+    }
+    return [...ConfiguredTrackIdSet].every((id) => returned.has(id));
+}
 
 function StatusForProgressionError(Error: ProgressionError){
     switch(Error){
@@ -95,115 +113,24 @@ progressionRouter.post("/encountered-content/:characterId", HasUndauntedMetagame
     });
 });
 
-progressionRouter.get("/progression/objectives/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-    const RequestorAccountId = req.AuthData.userId;
-
-    logger.info(`Objective progression fetched for userId ${RequestorAccountId}`);
-    
-    res.status(200);
-    res.json({
-        code: null,
-        message: "OK",
-        payload: {
-            objectives: [
-                
-            ],
-            progress_tracks: [
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_PlayerLevel",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Behemoth",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Strikers",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Hammer",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Repeaters",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_ChainBlades",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Axe",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Sword",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                },
-                {
-                    phx_account_id: RequestorAccountId,
-                    progression_id: "MasteryTrack_Weapon_Spear",
-                    progress: 99999999,
-                    confirmed_fremium_rank: 99999999,
-                    confirmed_premium_rank: 99999999,
-                    confirmed_date: new Date().toISOString(),
-                }
-            ]
-        }
-    })
+function Owns(req: any, res: any) {
+    // Game servers act for the player in the URL; clients may only act for themselves.
+    if (req.AuthData?.IsGameserver === true) return true;
+    if (req.params.userId !== req.AuthData?.userId) { res.status(403).send(); return false; }
+    return true;
+}
+progressionRouter.get("/progression/objectives/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const objectives = await GetObjectives(req.params.userId);
+    // Objectives and tracks are loaded separately by the game.
+    res.json(Envelope(objectives));
 });
 
-progressionRouter.get("/progression/objectives/:userId/:objectiveId", HasUndauntedMetagameAuth, (req: any, res) => {
-    const RequestorAccountId = req.AuthData.userId;
-
-    logger.info(`Objective progression fetched for userId ${RequestorAccountId}`);
-    
-    res.status(200);
-    res.json({
-        code: null,
-        message: "OK",
-        payload: {
-            phx_account_id: req.params.userId,
-            objective_id: req.params.objectiveId,
-            progress: 9999999,
-            completed_count: 9999999,
-            created_date: new Date("1970-1-1").toISOString(),
-            last_modified_date: new Date("1970-1-1").toISOString(),
-        }
-    })
+progressionRouter.get("/progression/objectives/:userId/:objectiveId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const objective = (await GetObjectives(req.params.userId, req.params.objectiveId))[0];
+    const payload = objective ?? ZeroObjectiveWire(req.params.userId, req.params.objectiveId);
+    res.json(Envelope(payload));
 });
 
 progressionRouter.get("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, async (req: any, res) => {
@@ -252,107 +179,114 @@ progressionRouter.post("/breadcrumbs/:characterId", HasUndauntedMetagameAuth, as
     });
 });
 
-progressionRouter.post("/progression/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-    const RequestorAccountId = req.params.userId;
-    
-    logger.info(`Progression set for userId ${RequestorAccountId} (stubbed)`);
-    
-    res.status(400); // TODO: Figure out how to properly grant progression. If this returns anything other than 400, we get the infinite mastery pop issue
-    res.send();
+function FirstDefined(source: any, names: string[]) {
+    for (const name of names) if (source?.[name] !== undefined) return source[name];
+    // Some game-server fields include a generated suffix.
+    if (source != undefined && typeof source === "object") {
+        for (const key of Object.keys(source)) {
+            const lowerKey = key.toLowerCase();
+            const matchedName = names.find((name) => lowerKey === name.toLowerCase() || lowerKey.startsWith(`${name.toLowerCase()}_`));
+            if (matchedName != undefined) return source[key];
+        }
+    }
+    return undefined;
+}
+
+type ParsedMasteryUpdate = { kind: "events"; update: MasteryUpdate };
+type MasteryParseResult = ParsedMasteryUpdate | { kind: "invalid"; reason: string } | undefined;
+
+function ValidMasteryInteger(value: number) {
+    return Number.isSafeInteger(value) && value >= 0;
+}
+
+function ParseMasteryUpdate(body: any): MasteryParseResult {
+    const source = body?.payload != undefined && typeof body.payload === "object" ? body.payload : body;
+    const isSnakeCasePayload = source?.objectives !== undefined || source?.progress_tracks !== undefined;
+    if (isSnakeCasePayload) {
+        if (!Array.isArray(source?.objectives) || !Array.isArray(source?.progress_tracks)) return { kind: "invalid", reason: "objectives_and_progress_tracks_must_be_arrays" };
+        const objectives = source.objectives.map((entry: any) => ({
+            objectiveId: entry?.objective_id,
+            value: Number(entry?.value),
+            completedCount: Number(entry?.completed_count ?? 0)
+        }));
+        const progressEvents: MasteryTrackEvent[] = source.progress_tracks.map((entry: any) => ({
+            track: entry?.progression_id,
+            amount: Number(entry?.progress)
+        }));
+        if (objectives.some((entry: any) => typeof entry.objectiveId !== "string" || !entry.objectiveId || !ValidMasteryInteger(entry.value) || !ValidMasteryInteger(entry.completedCount)) ||
+            progressEvents.some((entry: any) => typeof entry.track !== "string" || !entry.track || !ValidMasteryInteger(entry.amount))) return { kind: "invalid", reason: "mastery_values_must_be_non_negative_safe_integers" };
+        return { kind: "events", update: { objectives, progressEvents } };
+    }
+    const objectiveSource = FirstDefined(source, ["playerObjectives", "PlayerObjectives", "player_objectives"]);
+    const eventSource = FirstDefined(source, ["ProgresstrackEvents", "ProgressEvents", "progressEvents", "progress_track_events"]);
+    if (objectiveSource === undefined && eventSource === undefined) return undefined;
+    if ((objectiveSource !== undefined && !Array.isArray(objectiveSource)) || (eventSource !== undefined && !Array.isArray(eventSource))) return { kind: "invalid", reason: "mastery_objectives_and_progress_events_must_be_arrays" };
+
+    const objectives = (objectiveSource ?? []).map((entry: any) => ({
+        objectiveId: FirstDefined(entry, ["ObjectiveId", "objectiveId", "objective_id"]),
+        value: Number(FirstDefined(entry, ["Value", "value", "Progress", "progress"])),
+        completedCount: Number(FirstDefined(entry, ["CompletedCount", "completedCount", "completed_count"]) ?? 0)
+    }));
+    const progressEvents: MasteryTrackEvent[] = (eventSource ?? []).map((entry: any) => ({
+        track: FirstDefined(entry, ["Track", "track", "progression_id", "progressionId"]),
+        amount: Number(FirstDefined(entry, ["Amount", "amount"]))
+    }));
+    if (objectives.some((entry: any) => typeof entry.objectiveId !== "string" || !entry.objectiveId || !ValidMasteryInteger(entry.value) || !ValidMasteryInteger(entry.completedCount)) ||
+        progressEvents.some((entry: MasteryTrackEvent) => typeof entry.track !== "string" || !entry.track || !ValidMasteryInteger(entry.amount))) return { kind: "invalid", reason: "mastery_values_must_be_non_negative_safe_integers" };
+    return { kind: "events", update: { objectives, progressEvents } };
+}
+
+progressionRouter.post("/progression/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const body = req.body ?? {};
+    const parsed = ParseMasteryUpdate(body);
+    if (parsed?.kind === "invalid") {
+        logger.warn({ userId: req.params.userId, reason: parsed.reason }, "Invalid mastery progress rejected");
+        res.status(400).json({ code: "invalid_mastery_progress", message: parsed.reason, payload: null });
+        return;
+    }
+    if (parsed == undefined) {
+        // Old servers also use this endpoint as a handshake
+        res.status(200).json(Envelope({}));
+        return;
+    }
+    const trackIds = parsed.update.progressEvents.map(({ track }) => track);
+    const objectiveIds = parsed.update.objectives.map(({ objectiveId }) => objectiveId);
+    ApplyMasteryUpdate(req.params.userId, parsed.update);
+    res.status(200).json(Envelope(await GetMasteryUpdateResponse(req.params.userId, trackIds, objectiveIds)));
 });
 
-progressionRouter.get("/progression/:userId", HasUndauntedMetagameAuth, (req: any, res) => {
-    const RequestorAccountId = req.AuthData.userId;
-
-    // TODO: Impl proper progression. Right now this is the minimum to not block the Boreal crafting reqs
-
-    logger.info(`Progression fetched for userId ${RequestorAccountId} (stubbed)`);
-    
-    res.status(200);
-    res.json({
-        code: null,
-        message: "OK",
-        payload: [
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "season09b",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_PlayerLevel",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Behemoth",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Strikers",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Hammer",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Repeaters",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_ChainBlades",
-                progress: 99999999,
-                confirmed_fremium_rank: 99,
-                confirmed_premium_rank: 99,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Axe",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Sword",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            },
-            {
-                phx_account_id: RequestorAccountId,
-                progression_id: "MasteryTrack_Weapon_Warpike",
-                progress: 99999999,
-                confirmed_fremium_rank: 99999999,
-                confirmed_premium_rank: 99999999,
-                confirmed_date: new Date().toISOString(),
-            }
-        ]
-    })
+progressionRouter.post("/progression/:userId/:progressionId/:amount", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const amount = Number(req.params.amount);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !ConfiguredTrackIds().includes(req.params.progressionId)) {
+        res.status(400).json({ code: "invalid_progression_grant", message: "Track and positive integer amount are required", payload: null });
+        return;
+    }
+    const track = await ApplyTrackGrant(req.params.userId, req.params.progressionId, amount);
+    res.status(200).json(Envelope(track));
+});
+progressionRouter.post("/progression/:userId/:progressionId/:rank/confirm/:kind", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    if(req.params.progressionId === ACTIVE_HUNTPASS) {
+        const Result = ClaimHuntPass(req.params.userId, Number(req.params.rank), req.params.kind);
+        if(!Result.success) return res.status(Result.error === "rank_not_earned" || Result.error === "premium_required" ? 409 : 400).json({code: Result.error, message: Result.error, payload: null});
+        return res.json(Envelope(TrackWire(req.params.userId, Result.track)));
+    }
+    res.json(Envelope(await ConfirmTrack(req.params.userId, req.params.progressionId, Number(req.params.rank), req.params.kind)));
+});
+progressionRouter.delete("/progression/:userId/:progressionId", HasUndauntedMetagameAuth, async (req: any, res) => { if (!Owns(req, res)) return; await DeleteTrack(req.params.userId, req.params.progressionId); res.json(Envelope({})); });
+progressionRouter.get("/progression/:userId/:progressionId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const track = (await GetTracks(req.params.userId, req.params.progressionId))[0];
+    res.json(Envelope(track ?? ZeroTrackWire(req.params.userId, req.params.progressionId)));
+});
+progressionRouter.get("/progression/:userId", HasUndauntedMetagameAuth, async (req: any, res) => {
+    if (!Owns(req, res)) return;
+    const tracks = await GetTracks(req.params.userId);
+    if (!ValidateTrackPayload(tracks)) {
+        res.status(500).json({ code: "invalid_progression_tracks", message: "Configured progression tracks are incomplete", payload: null });
+        return;
+    }
+    res.status(200).json(Envelope(tracks));
 });
