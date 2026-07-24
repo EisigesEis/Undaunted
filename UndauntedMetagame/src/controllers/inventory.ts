@@ -1,11 +1,32 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { GetDb } from "../db";
-import { inventory } from "../db/schema";
+import { characters, inventory } from "../db/schema";
 import { logger } from "../logger";
-import { DoesCharacterBelongToUserId } from "./character";
 
 export type InventoryError = "forbidden" | "not_found" | "conflict" | "invalid_inventory_item" | "invalid_inventory_data" | "db_error";
 export type InventoryResult<T = void> = { success: true, data?: T } | { success: false, error: InventoryError };
+export type InventoryTransactionInstancedItem = {
+    catalogId: string;
+    instanceId: string;
+    updateVersion: number;
+    itemData?: string;
+};
+export type InventoryTransactionStackedItem = { catalogId: string; quantity: number };
+export type InventoryTransactionData = {
+    createdInstancedItems: InventoryTransactionInstancedItem[];
+    updatedInstancedItems: InventoryTransactionInstancedItem[];
+    updatedStackedItems: InventoryTransactionStackedItem[];
+    removedInstancedItems: InventoryTransactionInstancedItem[];
+};
+
+const RemovalBlockPattern = process.env.INVENTORY_REMOVAL_BLOCK_REGEX ?? "^(QI_.*|CONTAINER_CORE_.*_CELLCORE)$";
+let RemovalBlockRegex: RegExp;
+try {
+    RemovalBlockRegex = new RegExp(RemovalBlockPattern);
+}
+catch (error) {
+    throw new Error(`Invalid INVENTORY_REMOVAL_BLOCK_REGEX ${JSON.stringify(RemovalBlockPattern)}: ${error instanceof Error ? error.message : error}`);
+}
 
 class InventoryConflictError extends Error {
     constructor(message: string){
@@ -29,12 +50,75 @@ function MakeEmptyInventoryRow(CharacterId: string): typeof inventory.$inferInse
     };
 }
 
-function FindInstancedItemIndex(InstancedItems: any[], InstanceId: string){
-    return InstancedItems.findIndex((Item) => Item.instanceId === InstanceId);
+function GetOwnedCharacterInventory(Db: Pick<ReturnType<typeof GetDb>, "select">, UserId: string, CharacterId: string) {
+    const Row = Db
+        .select({
+            instancedItems: inventory.instancedItems,
+            stackedItems: inventory.stackedItems
+        })
+        .from(characters)
+        .leftJoin(inventory, eq(characters.characterId, inventory.characterId))
+        .where(and(eq(characters.characterId, CharacterId), eq(characters.userId, UserId)))
+        .get();
+
+    if(Row == undefined) {
+        return undefined;
+    }
+
+    const {instancedItems, stackedItems} = Row;
+    return {
+        Inventory: instancedItems === null
+            ? undefined
+            : {characterId: CharacterId, instancedItems, stackedItems: stackedItems!}
+    };
 }
 
 function HasStatelessItemData(Item: any){
     return !Object.prototype.hasOwnProperty.call(Item, "itemData") || Item.itemData == null;
+}
+
+function InstancedItemForAccount(UserId: string, Item: any){
+    return {
+        ...Item,
+        accountId: UserId,
+        catalogId: Item?.catalogId,
+        instanceId: Item?.instanceId,
+        updateVersion: Item?.updateVersion,
+        itemData: Item?.itemData ?? null
+    };
+}
+
+function TransactionInstancedItem(Item: any): InventoryTransactionInstancedItem {
+    if(typeof Item?.catalogId !== "string" || !Item.catalogId || typeof Item?.instanceId !== "string" || !Item.instanceId ||
+        !Number.isSafeInteger(Item?.updateVersion) || Item.updateVersion < 0 ||
+        (Item.itemData != null && typeof Item.itemData !== "string")) {
+        throw new InventoryValidationError("Invalid instanced item response data");
+    }
+    const result: InventoryTransactionInstancedItem = {
+        catalogId: Item.catalogId,
+        instanceId: Item.instanceId,
+        updateVersion: Item.updateVersion
+    };
+    if(typeof Item.itemData === "string") result.itemData = Item.itemData;
+    return result;
+}
+
+function TransactionStackedItem(Item: any): InventoryTransactionStackedItem {
+    if(typeof Item?.catalogId !== "string" || !Item.catalogId || !Number.isSafeInteger(Item?.quantity) || Item.quantity < 0) {
+        throw new InventoryValidationError("Invalid stacked item response data");
+    }
+    return { catalogId: Item.catalogId, quantity: Item.quantity };
+}
+
+function IsRemovalBlocked(Item: any){
+    return typeof Item?.catalogId === "string" && RemovalBlockRegex.test(Item.catalogId);
+}
+
+export function DecodeInventory(Row: {instancedItems: string, stackedItems: string} | undefined){
+    return {
+        instancedItems: Row ? JSON.parse(Row.instancedItems) as any[] : [],
+        stackedItems: Row ? JSON.parse(Row.stackedItems) as any[] : [],
+    };
 }
 
 function IsAllowedStaleStatelessReplacement(CurrentItem: any, IncomingItem: any, Operation: string){
@@ -42,6 +126,13 @@ function IsAllowedStaleStatelessReplacement(CurrentItem: any, IncomingItem: any,
         && HasStatelessItemData(CurrentItem)
         && HasStatelessItemData(IncomingItem)
         && CurrentItem.updateVersion === 0;
+}
+
+function IsSameInstancedItem(CurrentItem: any, IncomingItem: any){
+    return CurrentItem.catalogId === IncomingItem.catalogId
+        && CurrentItem.instanceId === IncomingItem.instanceId
+        && CurrentItem.updateVersion === IncomingItem.updateVersion
+        && (CurrentItem.itemData ?? null) === (IncomingItem.itemData ?? null);
 }
 
 function AssertValidIncomingInstancedItem(IncomingItem: any, Operation: string){
@@ -63,6 +154,10 @@ function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, O
         return "skip";
     }
 
+    if(IsSameInstancedItem(CurrentItem, IncomingItem)){
+        return "skip";
+    }
+
     const IsStaleInstancedItem = typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion;
     if(IsStaleInstancedItem){
         throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
@@ -72,14 +167,16 @@ function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, O
 }
 
 export async function UpdateInstancedItem(CharacterId: string, UserId: string, InstanceId: string, CatalogId: string, ItemData: string | null | undefined, UpdateVersion: number): Promise<InventoryResult<any>>{
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
-        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
-        return {success: false, error: "forbidden"};
-    }
-
     try{
         return GetDb().transaction((tx) => {
-            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+            const CharacterInventory = GetOwnedCharacterInventory(tx, UserId, CharacterId);
+
+            if(CharacterInventory == undefined){
+                logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+                return {success: false, error: "forbidden"} as InventoryResult<any>;
+            }
+
+            let CurrentInventory = CharacterInventory.Inventory;
 
             if(CurrentInventory == undefined){
                 logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
@@ -89,14 +186,15 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
                 tx.insert(inventory).values(CurrentInventory).run();
             }
 
-            const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+            const {instancedItems: InstancedItems} = DecodeInventory(CurrentInventory);
             const ItemIndex = InstancedItems.findIndex((Item) => Item.catalogId === CatalogId && Item.instanceId === InstanceId);
 
             if(ItemIndex < 0){
                 return {success: false, error: "not_found"} as InventoryResult<any>;
             }
 
-            const Item = InstancedItems[ItemIndex];
+            const Item = InstancedItemForAccount(UserId, InstancedItems[ItemIndex]);
+            InstancedItems[ItemIndex] = Item;
             const IncomingItem = {catalogId: CatalogId, instanceId: InstanceId, itemData: ItemData, updateVersion: UpdateVersion};
 
             if(AssertExistingInstancedItemWrite(Item, IncomingItem, "update") === "skip"){
@@ -137,30 +235,37 @@ export async function UpdateInstancedItem(CharacterId: string, UserId: string, I
     }
 }
 
-export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult<any[]>>{
+export async function RunInventoryTransaction(UserId: string, CharacterId: string, TransactionId: string, InstancedItemsToAdd: any[], StackedItemsToAdd: any[], InstancedItemsToRemove: any[], StackedItemsToRemove: any[], InstancedItemsToSave: any[]): Promise<InventoryResult<InventoryTransactionData>>{
     InstancedItemsToAdd ??= [];
     StackedItemsToAdd ??= [];
     InstancedItemsToRemove ??= [];
     StackedItemsToRemove ??= [];
     InstancedItemsToSave ??= [];
 
-    let TouchedStackedItems: any[] = []; // TODO: Clean this up if this ends up working
+    const TransactionData: InventoryTransactionData = {
+        createdInstancedItems: [],
+        updatedInstancedItems: [],
+        updatedStackedItems: [],
+        removedInstancedItems: [],
+    };
 
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){
-        logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
-        return {success: false, error: "forbidden"};
-    }
-
-    const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToRemove.length > 0 || InstancedItemsToSave.length > 0;
+    const ShouldTouchInstancedItems = InstancedItemsToAdd.length > 0 || InstancedItemsToSave.length > 0 || InstancedItemsToRemove.length > 0;
     const ShouldTouchStackedItems = StackedItemsToAdd.length > 0 || StackedItemsToRemove.length > 0;
 
-    if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
-        return {success: true};
-    }
-
     try{
-        GetDb().transaction((tx) => {
-            let CurrentInventory = tx.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)}).sync();
+        return GetDb().transaction((tx) => {
+            const CharacterInventory = GetOwnedCharacterInventory(tx, UserId, CharacterId);
+
+            if(CharacterInventory == undefined){
+                logger.error(`Specified characterId ${CharacterId} does not belong to user ${UserId}`);
+                return {success: false, error: "forbidden"} as InventoryResult<InventoryTransactionData>;
+            }
+
+            if(!ShouldTouchInstancedItems && !ShouldTouchStackedItems){
+                return {success: true, data: TransactionData} as InventoryResult<InventoryTransactionData>;
+            }
+
+            let CurrentInventory = CharacterInventory.Inventory;
 
             if(CurrentInventory == undefined){
                 logger.info(`Creating inventory for characterId ${CharacterId}`)
@@ -171,55 +276,54 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             }
 
             const Update: Partial<typeof inventory.$inferInsert> = {};
+            const Current = DecodeInventory(CurrentInventory);
 
             if(ShouldTouchInstancedItems){
-                const InstancedItems: any[] = JSON.parse(CurrentInventory.instancedItems);
+                const InstancedItems = Current.instancedItems.map((Item) => InstancedItemForAccount(UserId, Item));
+                const ItemByInstanceId = new Map<any, any>();
+                for(const Item of InstancedItems){
+                    if(!ItemByInstanceId.has(Item.instanceId)) ItemByInstanceId.set(Item.instanceId, Item);
+                }
                 let DidUpdateInstancedItems = false;
 
-                for(const ItemToRemove of InstancedItemsToRemove){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToRemove.instanceId);
-
-                    if(ItemIndex >= 0){
-                        AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToRemove, "remove");
-                        InstancedItems.splice(ItemIndex, 1);
-                        DidUpdateInstancedItems = true;
-                    }
-                }
-
-                for(const ItemToSave of InstancedItemsToSave){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToSave.instanceId);
-
-                    if(ItemIndex >= 0){
-                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToSave, "save") === "skip"){
-                            continue;
+                const UpsertItem = (IncomingItem: any, Operation: "save" | "add") => {
+                    const Item = InstancedItemForAccount(UserId, IncomingItem);
+                    const Existing = ItemByInstanceId.get(Item.instanceId);
+                    if(Existing != undefined){
+                        if(AssertExistingInstancedItemWrite(Existing, Item, Operation) === "skip"){
+                            return;
                         }
-
-                        InstancedItems[ItemIndex] = ItemToSave;
+                        InstancedItems[InstancedItems.indexOf(Existing)] = Item;
+                        ItemByInstanceId.set(Item.instanceId, Item);
+                        TransactionData.updatedInstancedItems.push(TransactionInstancedItem(Item));
                         DidUpdateInstancedItems = true;
                     }
                     else{
-                        AssertValidIncomingInstancedItem(ItemToSave, "save");
-                        InstancedItems.push(ItemToSave);
+                        AssertValidIncomingInstancedItem(Item, Operation);
+                        ItemByInstanceId.set(Item.instanceId, Item);
+                        InstancedItems.push(Item);
+                        TransactionData.createdInstancedItems.push(TransactionInstancedItem(Item));
                         DidUpdateInstancedItems = true;
                     }
+                };
+
+                for(const ItemToSave of InstancedItemsToSave){
+                    UpsertItem(ItemToSave, "save");
                 }
 
                 for(const ItemToAdd of InstancedItemsToAdd){
-                    const ItemIndex = FindInstancedItemIndex(InstancedItems, ItemToAdd.instanceId);
+                    UpsertItem(ItemToAdd, "add");
+                }
 
-                    if(ItemIndex >= 0){
-                        if(AssertExistingInstancedItemWrite(InstancedItems[ItemIndex], ItemToAdd, "add") === "skip"){
-                            continue;
-                        }
-
-                        InstancedItems[ItemIndex] = ItemToAdd;
-                        DidUpdateInstancedItems = true;
-                    }
-                    else{
-                        AssertValidIncomingInstancedItem(ItemToAdd, "add");
-                        InstancedItems.push(ItemToAdd);
-                        DidUpdateInstancedItems = true;
-                    }
+                for(const ItemToRemove of InstancedItemsToRemove){
+                    const Existing = ItemByInstanceId.get(ItemToRemove.instanceId);
+                    if(Existing == undefined || IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)) continue;
+                    const ItemIndex = InstancedItems.indexOf(Existing);
+                    if(ItemIndex < 0) continue;
+                    const [RemovedItem] = InstancedItems.splice(ItemIndex, 1);
+                    ItemByInstanceId.delete(ItemToRemove.instanceId);
+                    TransactionData.removedInstancedItems.push(TransactionInstancedItem(RemovedItem));
+                    DidUpdateInstancedItems = true;
                 }
 
                 if(DidUpdateInstancedItems){
@@ -228,41 +332,55 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
             }
 
             if(ShouldTouchStackedItems){
-                const StackedItems: any[] = JSON.parse(CurrentInventory.stackedItems);
-
-                for(const ItemToRemove of StackedItemsToRemove){
-                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToRemove.catalogId);
-
-                    if(ItemIndex < 0){
-                        continue;
-                    }
-
-                    StackedItems[ItemIndex].quantity -= ItemToRemove.quantity;
-
-                    if(StackedItems[ItemIndex].quantity <= 0){
-                        StackedItems.splice(ItemIndex, 1);
-                    }
+                const StackedItems = Current.stackedItems;
+                const ItemByCatalogId = new Map<string, any>();
+                let DidUpdateStackedItems = false;
+                for(const Item of StackedItems){
+                    if(!ItemByCatalogId.has(Item.catalogId)) ItemByCatalogId.set(Item.catalogId, Item);
                 }
 
                 for(const ItemToAdd of StackedItemsToAdd){
-                    const ItemIndex = StackedItems.findIndex((Item) => Item.catalogId === ItemToAdd.catalogId);
-
-                    if(ItemIndex >= 0){
-                        StackedItems[ItemIndex].quantity += ItemToAdd.quantity;
-                        TouchedStackedItems.push(StackedItems[ItemIndex]);
+                    const Existing = ItemByCatalogId.get(ItemToAdd.catalogId);
+                    if(Existing){
+                        Existing.quantity += ItemToAdd.quantity;
+                        TransactionData.updatedStackedItems.push(TransactionStackedItem(Existing));
                     }
                     else{
-                        TouchedStackedItems.push(ItemToAdd);
+                        TransactionData.updatedStackedItems.push(TransactionStackedItem(ItemToAdd));
                         StackedItems.push(ItemToAdd);
+                        ItemByCatalogId.set(ItemToAdd.catalogId, ItemToAdd);
                     }
+                    DidUpdateStackedItems = true;
                 }
 
-                Update.stackedItems = JSON.stringify(StackedItems);
+                for(const ItemToRemove of StackedItemsToRemove){
+                    const Existing = ItemByCatalogId.get(ItemToRemove.catalogId);
+                    if(!Existing) continue;
+                    if(IsRemovalBlocked(ItemToRemove) || IsRemovalBlocked(Existing)){
+                        TransactionData.updatedStackedItems.push(TransactionStackedItem(Existing), TransactionStackedItem({
+                            catalogId: Existing.catalogId, quantity: Existing.quantity > 0 ? Existing.quantity - 1 : 1
+                        }));
+                        continue;
+                    }
+                    Existing.quantity -= Number(ItemToRemove.quantity ?? 0);
+                    if(Existing.quantity <= 0){
+                        const ItemIndex = StackedItems.indexOf(Existing);
+                        if(ItemIndex >= 0) StackedItems.splice(ItemIndex, 1);
+                        ItemByCatalogId.delete(ItemToRemove.catalogId);
+                        Existing.quantity = 0;
+                    }
+                    TransactionData.updatedStackedItems.push(TransactionStackedItem(Existing));
+                    DidUpdateStackedItems = true;
+                }
+
+                if(DidUpdateStackedItems) Update.stackedItems = JSON.stringify(StackedItems);
             }
 
             if(Object.keys(Update).length > 0){
                 tx.update(inventory).set(Update).where(eq(inventory.characterId, CharacterId)).run();
             }
+
+            return {success: true, data: TransactionData} as InventoryResult<InventoryTransactionData>;
         });
     }
     catch(error){
@@ -285,31 +403,43 @@ export async function RunInventoryTransaction(UserId: string, CharacterId: strin
         return {success: false, error: "db_error"};
     }
 
-    return {success: true, data: TouchedStackedItems};
 }
 
 export async function GetInventoryForUserIdAndCharacterId(UserId: string, CharacterId: string): Promise<InventoryResult<{characterId: string, instancedItems: any[], stackedItems: any[]}>>{
-    if(!await DoesCharacterBelongToUserId(UserId, CharacterId)){ // TODO: HACK: Get rid of this ugly thing, this is a workaround as we don't have a userId on our inventories table
-        return {success: false, error: "forbidden"};
-    }
-
     try{
-        let InventoryFromDb = await GetDb().query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+        const Db = GetDb();
+        const CharacterInventory = GetOwnedCharacterInventory(Db, UserId, CharacterId);
+
+        if(CharacterInventory == undefined){
+            return {success: false, error: "forbidden"};
+        }
+
+        let InventoryFromDb = CharacterInventory.Inventory;
 
         if(InventoryFromDb == undefined){
             logger.info(`Creating inventory for characterId ${CharacterId} and userId ${UserId}`);
 
-            InventoryFromDb = MakeEmptyInventoryRow(CharacterId);
+            const EmptyInventory = MakeEmptyInventoryRow(CharacterId);
+            const CreatedInventory = Db.insert(inventory)
+                .values(EmptyInventory)
+                .onConflictDoNothing() // Another request created inventory after lookup, do not overwrite
+                .returning()
+                .get();
 
-            await GetDb().insert(inventory).values(InventoryFromDb);
+            InventoryFromDb = CreatedInventory ?? await Db.query.inventory.findFirst({where: eq(inventory.characterId, CharacterId)});
+            if(InventoryFromDb == undefined){
+                throw new Error(`Inventory creation did not produce a row for characterId ${CharacterId}`);
+            }
         }
 
+        const {instancedItems: StoredInstancedItems, stackedItems: StackedItems} = DecodeInventory(InventoryFromDb);
+        const InstancedItems = StoredInstancedItems.map((Item) => InstancedItemForAccount(UserId, Item));
         return {
             success: true,
             data: {
                 characterId: CharacterId,
-                instancedItems: JSON.parse(InventoryFromDb!.instancedItems),
-                stackedItems: JSON.parse(InventoryFromDb!.stackedItems)
+                instancedItems: InstancedItems,
+                stackedItems: StackedItems
             }
         };
     }

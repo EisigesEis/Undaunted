@@ -85,6 +85,13 @@
       "when": 1783937518449,
       "tag": "0011_past_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1784073600000,
+      "tag": "0012_loadout_active_index",
+      "breakpoints": true
     }
   ]
 }

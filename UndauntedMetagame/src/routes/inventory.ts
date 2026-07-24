@@ -37,7 +37,7 @@ inventoryRouter.get("/inventory/:userId/:characterId", HasUndauntedMetagameAuth,
     req.AuthData.userId;
     const CharacterId = req.params.characterId;
 
-    logger.info(`UserId ${UserId} requested inventory for CharacterId ${CharacterId}`);
+    logger.debug(`UserId ${UserId} requested inventory for CharacterId ${CharacterId}`);
 
     const InventoryResult = await GetInventoryForUserIdAndCharacterId(UserId, CharacterId);
 
@@ -64,14 +64,14 @@ inventoryRouter.post("/inventory", HasUndauntedMetagameAuth, async (req: any, re
     const TransactionResult = await RunInventoryTransaction(UserId, CharacterId, TransactionId, InstancedItemsToAdd, StackedItemsToAdd, InstancedItemsToRemove, StackedItemsToRemove, InstancedItemsToSave);
 
     if(TransactionResult.success){
-        logger.info(`Ran transactionId ${TransactionId} for userId ${UserId} and characterId ${CharacterId}`);
+        logger.debug(`Ran transactionId ${TransactionId} for userId ${UserId} and characterId ${CharacterId}`);
 
         res.status(200);
         res.json({
-            createdInstancedItems: InstancedItemsToAdd,
-            updatedInstancedItems: [], // TODO: Actually properly diff & merge the JSON blobs
-            updatedStackedItems: TransactionResult.data != undefined ? TransactionResult.data : [],
-            removedInstancedItems: InstancedItemsToRemove
+            createdInstancedItems: TransactionResult.data?.createdInstancedItems ?? [],
+            updatedInstancedItems: TransactionResult.data?.updatedInstancedItems ?? [],
+            updatedStackedItems: TransactionResult.data?.updatedStackedItems ?? [],
+            removedInstancedItems: TransactionResult.data?.removedInstancedItems ?? []
         });
 
         return;
@@ -96,8 +96,7 @@ inventoryRouter.post("/inventory/instanceditem", HasUndauntedMetagameAuth, async
     const ItemResult = await UpdateInstancedItem(CharacterId, UserId, InstanceId, CatalogId, ItemData, UpdateVersion);
 
     if(ItemResult.success){
-        res.status(200);
-        res.json(ItemResult.data);
+        res.status(200).send();
     }
     else{
         res.status(StatusForInventoryError(ItemResult.error));
