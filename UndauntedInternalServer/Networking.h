@@ -1,14 +1,5 @@
 #pragma once
 
-#include <Windows.h>
-#include "SDK.hpp"
-
-using namespace SDK;
-
-namespace Networking {
-	extern UNetDriver* NetDriver;
-
-	bool Listen(UEngine* Engine, int Port);
-
-	void TickNetworking();
-}
+// Compatibility include for modules that still include the historical root
+// header. The implementation and public declarations now live in Networking/.
+#include "Networking/Networking.h"

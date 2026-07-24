@@ -33,6 +33,27 @@
     <ClInclude Include="Networking\NetworkLifecycle.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Networking\Networking.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\Private\RuntimeState.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\Private\ConnectionState.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\Private\ConsiderCache.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\Private\ReplicationScheduler.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\Private\ListenDispatch.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Networking\CombatBridge.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -62,7 +83,7 @@
     <ClCompile Include="SDK\Engine_functions.cpp">
       <Filter>SDK</Filter>
     </ClCompile>
-    <ClCompile Include="Networking.cpp">
+    <ClCompile Include="Networking\Networking.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Networking\NetworkLifecycle.cpp">

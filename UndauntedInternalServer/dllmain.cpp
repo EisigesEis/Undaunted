@@ -508,7 +508,8 @@ void GameEngineTickHook(UGameEngine* GameEngine, float DeltaTime, char CanRender
                 Networking::NetDriver->ClientConnections.Num()))
             : 0;
         Networking::Lifecycle::ObserveConnections(
-            RawConnections, RawConnections, World);
+            static_cast<uint32_t>(Networking::GetLiveConnections().size()),
+            RawConnections, World);
     }
 
     if (Globals::DoListen && ShouldAttemptListen(DeltaTime)) {
