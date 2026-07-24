@@ -847,14 +847,6 @@ function handlePrivateMessage(session: XmppSession, node: XmppNode, body: string
     for (const Recipient of Recipients) {
         sendPrivateMessage(Recipient, Message, Recipient.fullJid);
     }
-
-    // RE: Client 1.4.4 correlates a pending DM with the exact `to` JID it
-    // sent. Echoing the recipient's canonical JID instead breaks that match,
-    // notably for local-domain targets such as user@127.0.0.1:9000.
-    const Recipient = [...Recipients][0];
-    if (Recipient != undefined) {
-        sendPrivateMessage(session, Message, Message.toRaw);
-    }
 }
 
 function sendRoomMessage(session: XmppSession, message: RoutedRoomMessage, room: string) {

@@ -159,8 +159,8 @@ export async function runSelftest() {
     const PrivateDelivery = await Bob.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "bob private delivery");
     assert(PrivateDelivery.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), "private delivery should identify the sender by full JID");
     assert(PrivateDelivery.includes(`to="bob@prod.ol.epicgames.com/${BobResource}"`), "private delivery should target the recipient full JID");
-    const PrivateAcknowledgement = await Alice.waitFor((Message) => Message.includes('type="chat"') && Message.includes("Hello Bob"), "alice private send acknowledgement");
-    assert(PrivateAcknowledgement.includes('to="bob@prod.ol.epicgames.com"'), "private acknowledgement should retain the raw recipient target");
+    await delay(25);
+    assert(!Alice.messages.some((Message) => Message.includes('id="private-1"') && Message.includes("Hello Bob")), "private message should not be echoed to sender");
 
     const PrivateTargetCases = [
         {id: "private-bare-account", target: "bob", body: "Bare account whisper"},
@@ -176,9 +176,8 @@ export async function runSelftest() {
         const Delivered = await Bob.waitFor((Message) => Message.includes(`id="${TestCase.id}"`) && Message.includes(TestCase.body), `${TestCase.id} recipient delivery`);
         assert(Delivered.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), `${TestCase.id} should identify Alice`);
         assert(Delivered.includes(`to="bob@prod.ol.epicgames.com/${BobResource}"`), `${TestCase.id} should target Bob's bound JID`);
-        const Acknowledgement = await Alice.waitFor((Message) => Message.includes(`id="${TestCase.id}"`) && Message.includes(TestCase.body), `${TestCase.id} sender acknowledgement`);
-        assert(Acknowledgement.includes(`to="${TestCase.target}"`), `${TestCase.id} should preserve its raw target`);
-        assert(Acknowledgement.includes(`from="alice@prod.ol.epicgames.com/${AliceResource}"`), `${TestCase.id} acknowledgement should identify Alice`);
+        await delay(25);
+        assert(!Alice.messages.some((Message) => Message.includes(`id="${TestCase.id}"`) && Message.includes(TestCase.body)), `${TestCase.id} should not be echoed to sender`);
     }
 
     Alice.ws.send(`<message type="chat" id="private-userid" to="bob"><body>Hello Bob by account</body></message>`);
