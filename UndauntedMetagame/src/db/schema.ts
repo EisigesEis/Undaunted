@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
     userId: text("userId").notNull().primaryKey(),
@@ -83,6 +83,21 @@ export const encounteredcontent = sqliteTable("encounteredcontent", {
     characterId: text("characterId").notNull().primaryKey(),
     userId: text("userId").notNull(),
     encounteredcontent: text("encounteredcontent").notNull()
+});
+
+export const escalationprogression = sqliteTable("escalationprogression", {
+    userId: text("userId").notNull(),
+    escalationSeason: text("escalationSeason").notNull(),
+    escalationLevel: integer("escalationLevel").notNull(),
+    nextLevelXp: integer("nextLevelXp").notNull(),
+    talentsProgress: text("talentsProgress").notNull(),
+    unlockProgress: text("unlockProgress").notNull(),
+    updateVersion: integer("updateVersion").notNull(),
+    lastModifiedDate: text("lastModifiedDate").notNull()
+}, (table) => {
+    return {
+        pk: primaryKey({columns: [table.userId, table.escalationSeason]})
+    };
 });
 
 export const invitecodes = sqliteTable("invitecodes", {
