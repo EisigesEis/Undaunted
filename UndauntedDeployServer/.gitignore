@@ -9,4 +9,5 @@ tmp/
 temp/
 .cache/
 *.db
+*.log
 file

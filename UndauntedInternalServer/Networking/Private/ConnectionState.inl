@@ -28,6 +28,11 @@
     }
 
     static void EmitPendingConnectionEvents() {
+        if (!LifecycleEventSinkEnabled()) {
+            PendingConnectionEventCount = 0;
+            return;
+        }
+
         for (size_t Index = 0; Index < PendingConnectionEventCount; ++Index) {
             const ConnectionEvent& Event = PendingConnectionEvents[Index];
             const std::string CommonFields =

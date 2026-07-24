@@ -335,6 +335,9 @@ const GAMESERVER_ASSET_STRIPPING_LOG_DETAILS = ParseBooleanEnvironment("GAMESERV
 const GAMESERVER_ASSET_GC_WAIT_SECONDS = ParseBoundedIntegerEnvironment("GAMESERVER_ASSET_GC_WAIT_SECONDS", 15, 1, 15);
 const GAMESERVER_PROFILING = ParseBooleanEnvironment("GAMESERVER_PROFILING", false);
 const GAMESERVER_PROFILE_INTERVAL_SECONDS = ParseBoundedIntegerEnvironment("GAMESERVER_PROFILE_INTERVAL_SECONDS", 30, 10, 3600);
+const GAMESERVER_DIAGNOSTICS_DIRECTORY = process.env.GAMESERVER_DIAGNOSTICS_DIRECTORY?.trim() || "";
+const GAMESERVER_PROFILE_MAX_BYTES = ParseBoundedIntegerEnvironment(
+    "GAMESERVER_PROFILE_MAX_BYTES", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024);
 const GAMESERVER_CONSIDER_CACHE_MAX_AGE_MS = ParseBoundedIntegerEnvironment(
     "GAMESERVER_CONSIDER_CACHE_MAX_AGE_MS", 250, 50, 5000);
 
@@ -1169,6 +1172,8 @@ async function StartServer(Options: StartServerOptions){
         `-undauntedAssetGcWaitSeconds=${GAMESERVER_ASSET_GC_WAIT_SECONDS}`,
         `-undauntedProfiling=${GAMESERVER_PROFILING}`,
         `-undauntedProfileIntervalSeconds=${GAMESERVER_PROFILE_INTERVAL_SECONDS}`,
+        `-undauntedProfileOutputDirectory=${GAMESERVER_DIAGNOSTICS_DIRECTORY}`,
+        `-undauntedProfileMaxBytes=${GAMESERVER_PROFILE_MAX_BYTES}`,
         `-undauntedConsiderCacheMaxAgeMs=${GAMESERVER_CONSIDER_CACHE_MAX_AGE_MS}`,
         `-undauntedLifecycleCallbackUrl=${GAMESERVER_LIFECYCLE_CALLBACK_URL}`,
         `-undauntedDllSha256=${DllSha256}`,

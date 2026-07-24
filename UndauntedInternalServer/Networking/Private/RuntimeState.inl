@@ -25,6 +25,10 @@ namespace Networking {
         LifecycleSink = Sink;
     }
 
+    static bool LifecycleEventSinkEnabled() {
+        return LifecycleSink != nullptr;
+    }
+
     static void RecordLifecycleEvent(const std::string& EventName,
         const std::string& FieldsJson) {
         if (LifecycleSink != nullptr)

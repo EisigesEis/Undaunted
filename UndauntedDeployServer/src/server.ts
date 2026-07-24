@@ -2,11 +2,13 @@ import { app } from "./app";
 import { Startup } from "./controllers/gameservers";
 import { RunWatchdog } from "./controllers/watchdog";
 import { logger } from "./logger";
+import { StartPerformanceMonitoring } from "./performance";
 
 const PORT = process.env.PORT;
 
 app.listen(PORT, async () => {
   try{
+    StartPerformanceMonitoring();
     await Startup();
 
     setInterval(RunWatchdog, 5 * 1000);

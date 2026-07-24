@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -19,8 +19,20 @@
     <Filter Include="SDK">
       <UniqueIdentifier>{f7171c16-3dd7-48b5-89e7-59c77c468888}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Hooks">
+      <UniqueIdentifier>{9a090ef4-0728-4a45-9c7c-7044347405c6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Networking">
+      <UniqueIdentifier>{8c3f11b2-4e2a-4d57-b05e-5c1881a6e9c8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Networking\Private">
+      <UniqueIdentifier>{c8bd8110-1948-4a08-a1f2-8d14d2b9d30e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AssetOptimization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="framework.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -30,32 +42,28 @@
     <ClInclude Include="Networking.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Networking\NetworkLifecycle.h">
+    <ClInclude Include="ServerPacing.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Networking\Networking.h">
+    <ClInclude Include="ServerPerformance.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Networking\Private\RuntimeState.inl">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Hooks\NativeNameCleanup.h">
+      <Filter>Hooks</Filter>
     </ClInclude>
-    <ClInclude Include="Networking\Private\ConnectionState.inl">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Networking\Private\ConsiderCache.inl">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Networking\Private\ReplicationScheduler.inl">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Networking\Private\ListenDispatch.inl">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Networking\CombatBridge.inl">
-      <Filter>Header Files</Filter>
-    </ClInclude>
+    <ClInclude Include="Networking\Networking.h"><Filter>Networking</Filter></ClInclude>
+    <ClInclude Include="Networking\NetworkLifecycle.h"><Filter>Networking</Filter></ClInclude>
+    <ClInclude Include="Networking\Private\RuntimeState.inl"><Filter>Networking\Private</Filter></ClInclude>
+    <ClInclude Include="Networking\Private\ConnectionState.inl"><Filter>Networking\Private</Filter></ClInclude>
+    <ClInclude Include="Networking\Private\ConsiderCache.inl"><Filter>Networking\Private</Filter></ClInclude>
+    <ClInclude Include="Networking\Private\ReplicationScheduler.inl"><Filter>Networking\Private</Filter></ClInclude>
+    <ClInclude Include="Networking\Private\ListenDispatch.inl"><Filter>Networking\Private</Filter></ClInclude>
+    <ClInclude Include="Networking\CombatBridge.inl"><Filter>Networking</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AssetOptimization.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="dllmain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -83,11 +91,16 @@
     <ClCompile Include="SDK\Engine_functions.cpp">
       <Filter>SDK</Filter>
     </ClCompile>
-    <ClCompile Include="Networking\Networking.cpp">
+    <ClCompile Include="Networking\Networking.cpp"><Filter>Networking</Filter></ClCompile>
+    <ClCompile Include="Networking\NetworkLifecycle.cpp"><Filter>Networking</Filter></ClCompile>
+    <ClCompile Include="ServerPacing.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Networking\NetworkLifecycle.cpp">
+    <ClCompile Include="ServerPerformance.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Hooks\NativeNameCleanup.cpp">
+      <Filter>Hooks</Filter>
     </ClCompile>
     <ClCompile Include="SDK\Archon_functions.cpp">
       <Filter>SDK</Filter>

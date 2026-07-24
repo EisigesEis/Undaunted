@@ -141,6 +141,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ProgramDatabaseFile>$(OutDir)$(TargetName)-build.pdb</ProgramDatabaseFile>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -148,14 +149,20 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="AssetOptimization.h" />
     <ClInclude Include="constants.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Hooks\NativeNameCleanup.h" />
     <ClInclude Include="Networking.h" />
     <ClInclude Include="Networking\Networking.h" />
     <ClInclude Include="Networking\NetworkLifecycle.h" />
+    <ClInclude Include="ServerPacing.h" />
+    <ClInclude Include="ServerPerformance.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AssetOptimization.cpp" />
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="Hooks\NativeNameCleanup.cpp" />
     <ClCompile Include="MinHook\buffer.c" />
     <ClCompile Include="MinHook\hde\hde32.c" />
     <ClCompile Include="MinHook\hde\hde64.c" />
@@ -163,6 +170,8 @@
     <ClCompile Include="MinHook\trampoline.c" />
     <ClCompile Include="Networking\Networking.cpp" />
     <ClCompile Include="Networking\NetworkLifecycle.cpp" />
+    <ClCompile Include="ServerPacing.cpp" />
+    <ClCompile Include="ServerPerformance.cpp" />
     <ClCompile Include="SDK\Archon_functions.cpp" />
     <ClCompile Include="SDK\Basic.cpp" />
     <ClCompile Include="SDK\BPGM_Archon_Prototype_functions.cpp" />
