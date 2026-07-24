@@ -1,8 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { GetDb } from "../db";
-import { GetUserIDForAPIKey, HashUserAPIKey } from "./auth";
-import { invitecodes, userapikeys, users } from "../db/schema";
+import { GetUserIDForAPIKey, HashUserAPIKey, RegisterUserAPIKeyHash } from "./auth";
+import { invitecodes, users } from "../db/schema";
 import { and, eq, gt, or, sql } from "drizzle-orm";
+import { RememberUsernameForUserId } from "./login";
 
 const AUTH_MODE = process.env.AUTH_MODE;
 const NODE_ENV = process.env.NODE_ENV;
@@ -28,15 +29,31 @@ type PlayerLocation = { // TODO: Track more stuff from our matchmaking telemetry
     EnteredTime: number
 }
 
+export type PlayerMatchmakingActivity = {
+    CandidateId: string,
+    GameMode: string,
+    HuntId: string,
+    Phase: string,
+    StatusReason: string | undefined,
+    Host: string | undefined,
+    Port: number | undefined,
+    ServerId: string | undefined,
+    UpdatedTime: number,
+    ReadyTime: number | undefined
+}
+
 export type PlayerData = {
     UserId: string,
-    Map: string,
+    Map: string | undefined,
+    LastHeartbeatAt: number | undefined,
     HuntId: string | undefined,
-    EnteredHuntAt: number | undefined
+    EnteredHuntAt: number | undefined,
+    Matchmaking: PlayerMatchmakingActivity | undefined
 };
 
 let PlayerActivityMap: Map<string, PlayerActivity> = new Map<string, PlayerActivity>();
 let PlayerLocationMap: Map<string, PlayerLocation> = new Map<string, PlayerLocation>();
+let PlayerMatchmakingActivityMap: Map<string, PlayerMatchmakingActivity> = new Map<string, PlayerMatchmakingActivity>();
 
 export function IsRegistrationMode(Value: unknown): Value is RegistrationMode {
     return typeof Value === "string" && VALID_REGISTRATION_MODES.includes(Value as RegistrationMode);
@@ -107,10 +124,8 @@ export async function RegisterUser(Username: string){
         notes: 0
     });
 
-    await GetDb().insert(userapikeys).values({
-        userId: UID,
-        keyHash: UUKHash
-    });
+    await RegisterUserAPIKeyHash(UID, UUKHash);
+    RememberUsernameForUserId(UID, Username);
 
     return UUK;
 }
@@ -155,20 +170,42 @@ export async function UpdatePlayerLocation(UserId: string, HuntId: string){
     });
 }
 
+export async function UpdatePlayerMatchmakingActivity(UserId: string, Activity: Omit<PlayerMatchmakingActivity, "UpdatedTime">){
+    PlayerMatchmakingActivityMap.set(UserId, {
+        ...Activity,
+        UpdatedTime: Date.now()
+    });
+}
+
 export async function GetRecentPlayerData(){
     let PlayerDataToReturn: PlayerData[] = [];
+    const RecentPlayerIds = new Set<string>();
 
     PlayerActivityMap.forEach((value, key, map) => {
         if(Date.now() - value.LastUpdatedTime <= 90 * 1000){ // If entry is < 90s old
-            const PlayerLocationData: PlayerLocation | undefined = PlayerLocationMap.get(key);
-
-            PlayerDataToReturn.push({
-                UserId: key,
-                Map: value.Map,
-                HuntId: PlayerLocationData?.HuntId,
-                EnteredHuntAt: PlayerLocationData?.EnteredTime
-            });
+            RecentPlayerIds.add(key);
         }
+    });
+
+    PlayerMatchmakingActivityMap.forEach((value, key, map) => {
+        if(Date.now() - value.UpdatedTime <= 5 * 60 * 1000){
+            RecentPlayerIds.add(key);
+        }
+    });
+
+    RecentPlayerIds.forEach((UserId) => {
+        const PlayerActivityData = PlayerActivityMap.get(UserId);
+        const PlayerLocationData = PlayerLocationMap.get(UserId);
+        const MatchmakingActivity = PlayerMatchmakingActivityMap.get(UserId);
+
+        PlayerDataToReturn.push({
+            UserId: UserId,
+            Map: PlayerActivityData?.Map,
+            LastHeartbeatAt: PlayerActivityData?.LastUpdatedTime,
+            HuntId: PlayerLocationData?.HuntId ?? MatchmakingActivity?.HuntId,
+            EnteredHuntAt: PlayerLocationData?.EnteredTime,
+            Matchmaking: MatchmakingActivity
+        });
     });
 
     return PlayerDataToReturn;

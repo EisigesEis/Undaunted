@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
     userId: text("userId").notNull().primaryKey(),
@@ -33,11 +33,34 @@ export const loadouts = sqliteTable("loadouts", {
 export const gameserverapikeys = sqliteTable("gameserverapikeys", {
     id: integer("id").notNull().primaryKey({autoIncrement: true}),
     keyHash: text("keyHash")
+}, (table) => {
+    return {
+        keyHashIdx: index("gameserverapikeys_keyHash_idx").on(table.keyHash)
+    };
 });
 
 export const userapikeys = sqliteTable("userapikeys", {
     userId: text("userId").notNull().primaryKey(),
     keyHash: text("keyHash").notNull()
+}, (table) => {
+    return {
+        keyHashIdx: index("userapikeys_keyHash_idx").on(table.keyHash)
+    };
+});
+
+export const userrefreshtokens = sqliteTable("userrefreshtokens", {
+    id: integer("id").notNull().primaryKey({autoIncrement: true}),
+    userId: text("userId").notNull(),
+    tokenHash: text("tokenHash").notNull(),
+    issuedAt: text("issuedAt").notNull(),
+    expiresAt: text("expiresAt").notNull(),
+    revokedAt: text("revokedAt"),
+    replacedByTokenHash: text("replacedByTokenHash")
+}, (table) => {
+    return {
+        tokenHashIdx: index("userrefreshtokens_tokenHash_idx").on(table.tokenHash),
+        userIdIdx: index("userrefreshtokens_userId_idx").on(table.userId)
+    };
 });
 
 export const userapikeystoregister = sqliteTable("userapikeystoregister", {
