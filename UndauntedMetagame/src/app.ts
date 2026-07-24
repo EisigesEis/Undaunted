@@ -1,6 +1,5 @@
 import express from "express";
 import { loginRouter } from "./routes/login.js";
-import { logger } from "./logger.js";
 import { eosRouter } from "./routes/eos.js";
 import { systemRouter } from "./routes/system.js";
 import { characterRouter } from "./routes/character.js";
@@ -15,6 +14,7 @@ import { loadoutRouter } from "./routes/loadout.js";
 import { undauntedApiRouter } from "./routes/undauntedapi.js";
 import { friendsRouter } from "./routes/friends.js";
 import { escalationRouter } from "./routes/escalation.js";
+import { LogFullAttempt } from "./requestLogger.js";
 
 export const app = express();
 
@@ -38,29 +38,10 @@ app.use("/", friendsRouter);
 app.use("/", escalationRouter);
 app.use("/undaunted/api", undauntedApiRouter); // Everything that I/we add to help manage undaunted that doesn't belong to the game proper belongs here
 
-function LogFullAttempt(req: express.Request, parseError?: unknown) {
-    const { authorization: _Authorization, ...SafeHeaders } = req.headers;
-    logger.warn({
-        method: req.method,
-        url: req.url,
-        originalUrl: req.originalUrl,
-        baseUrl: req.baseUrl,
-        path: req.path,
-        httpVersion: req.httpVersion,
-        remoteAddress: req.socket.remoteAddress,
-        remotePort: req.socket.remotePort,
-        headers: SafeHeaders,
-        query: req.query,
-        params: req.params,
-        body: req.body,
-        parseError: parseError instanceof Error ? parseError.message : parseError
-    }, "Unstubbed route full request");
-}
-
 // Invalid JSON cannot reach the fallback route.
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {
-        LogFullAttempt(req, error);
+        LogFullAttempt(req, "Unstubbed route full request", error);
         res.status(400).send();
         return;
     }

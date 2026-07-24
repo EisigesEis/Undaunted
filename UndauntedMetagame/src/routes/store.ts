@@ -1,110 +1,86 @@
 import { Router } from "express";
 import { logger } from "../logger";
 import { HasUndauntedMetagameAuth } from "../middleware/HasUndauntedMetagameAuth";
-import { GetNotesForUser } from "../controllers/store";
+import { CreatePurchaseToken, GetBalancesForUser, GetStoreCatalog, PurchaseCurrency, PurchaseFromToken } from "../controllers/store";
+import { LogFullAttempt } from "../requestLogger";
 
 export const storeRouter = Router();
 
+export function WireBalances(Balances: Awaited<ReturnType<typeof GetBalancesForUser>>){
+    return {
+        CURRENCY_CELLDUST: 0,
+        CURRENCY_EVENT_01: 0,
+        CURRENCY_PLATINUM: 0,
+        CURRENCY_PRESTIGE: 0,
+        CURRENCY_PJM_PRESTIGE_EMPTY: 0,
+        CURRENCY_PJM_PRESTIGE_FILLED: 0,
+        id_currency_celldust: 0,
+        id_currency_event_01: 0,
+        id_currency_platinum: 0,
+        id_currency_prestige: 0,
+        id_currency_pjm_prestige_empty: 0,
+        id_currency_pjm_prestige_filled: 0,
+        ...Balances,
+        id_currency_notes: Balances.CURRENCY_NOTES,
+        id_currency_marks_steel: Balances.CURRENCY_MARKS_STEEL,
+        id_currency_marks_gilded: Balances.CURRENCY_MARKS_GILDED,
+    };
+}
+
 storeRouter.post("/reconcile", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const Notes = await GetNotesForUser(req.AuthData.userId);
-
-    logger.info(`Retrieved notes balance of ${Notes} for ${req.AuthData.userId}`);
-
-    res.status(200);
-    res.json({
-        balances: {
-            id_currency_notes: Notes,
-            CURRENCY_NOTES: Notes
-        },
-        refreshInventory: true
-    });
+    res.status(200).json({balances: WireBalances(await GetBalancesForUser(req.AuthData.userId)), refreshInventory: true});
 });
 
-storeRouter.get("/creator", HasUndauntedMetagameAuth, async (req: any, res) => {
-    logger.info("SupportACreator (stubbed)");
-
-    res.status(200);
-    res.json({
-        "expirationDate": "2099-01-01T01:00:00.041Z",
-        "slug": "MROWMROW",
-        "success": true
-    });
-})
+storeRouter.get("/creator", HasUndauntedMetagameAuth, (_req, res) => {
+    res.status(200).json({expirationDate: "2099-01-01T01:00:00.041Z", slug: "MROWMROW", success: true});
+});
 
 storeRouter.get("/balance", HasUndauntedMetagameAuth, async (req: any, res) => {
-    const UserId = req.AuthData.userId;
-
-    const NotesBalance = await GetNotesForUser(UserId);
-
-    logger.info(`Fetched notes balance of ${NotesBalance} for userId ${UserId}`);
-
-    res.status(200);
-    res.json({
-        id_currency_s20_coin: 0,
-        CURRENCY_GAUNTLET_COIN_FADED: 0,
-        CURRENCY_S20_COIN: 0,
-        CURRENCY_S18_COIN: 0,
-        id_currency_seasonal_coin: 0,
-        id_currency_s18_coin: 0,
-        id_currency_weapon_token: 25,
-        id_currency_celldust: 0,
-        id_currency_event_ramsgiving: 0,
-        CURRENCY_NOTES: NotesBalance,
-        id_currency_event_frostfall: 0,
-        CURRENCY_EVENT_DARKHARVEST: 0,
-        CURRENCY_S19_COIN: 0,
-        id_currency_s16_coin: 0,
-        CURRENCY_S16_COIN: 0,
-        id_currency_gauntlet_coin: 0,
-        id_currency_s13_coin: 0,
-        CURRENCY_MARKS_STEEL: 0,
-        CURRENCY_S13_COIN: 0,
-        CURRENCY_EVENT_FROSTFALL: 0,
-        CURRENCY_GAUNTLET_COIN: 0,
-        id_currency_marks_steel: 0,
-        id_currency_rewardcache: 0,
-        CURRENCY_PRESTIGE: 0,
-        CURRENCY_SEASONAL_COIN: 0,
-        CURRENCY_REWARDCACHE: 0,
-        id_currency_token_exchange_speed_up: 0,
-        id_currency_event_springtide: 0,
-        CURRENCY_TOKEN_EXCHANGE_SPEED_UP: 0,
-        id_currency_gauntlet_coin_faded: 0,
-        CURRENCY_S15_COIN: 0,
-        CURRENCY_PLATINUM: 0,
-        id_currency_platinum: 0,
-        id_currency_s15_coin: 0,
-        id_currency_marks_gilded: 0,
-        id_currency_event_darkharvest: 0,
-        id_currency_event_saintsbond: 0,
-        CURRENCY_EVENT_SPRINGTIDE: 0,
-        id_currency_s19_coin: 0,
-        id_currency_notes: NotesBalance,
-        id_currency_prestige: 0,
-        id_currency_s13_daily: 0,
-        CURRENCY_WEAPON_TOKEN: 25,
-        CURRENCY_MARKS_GILDED: 0,
-        CURRENCY_S13_DAILY: 0,
-        CURRENCY_CELLDUST: 0,
-        CURRENCY_S14_COIN: 0,
-        CURRENCY_EVENT_SAINTSBOND: 0,
-        CURRENCY_S17_COIN: 0,
-        id_currency_s14_coin: 0,
-        CURRENCY_EVENT_RAMSGIVING: 0,
-        id_currency_s17_coin: 0
-    });
+    res.status(200).json(WireBalances(await GetBalancesForUser(req.AuthData.userId)));
 });
 
 storeRouter.get("/product/skus/public", HasUndauntedMetagameAuth, async (req: any, res) => {
-    logger.info("Store SKUs (stubbed)");
-
-    // TODO: No clue if this is microtransactions or game transactions yet
-    // If game transactions, I'll support it as it was on live
-    // If microtransactions, I'll prob rewire to make everything earnable (no real money here!)
-
-    res.status(400);
-    res.json({
-        code: "400",
-        message: "Undaunted does not support the store (yet)"
-    });
+    if(typeof req.query.requiredTags !== "string") return res.status(400).json({code: "400", message: "missing requiredTags query parameter"});
+    const Tags = req.query.requiredTags.split(",").map((Tag: string) => Tag.trim()).filter(Boolean);
+    const Catalog = await GetStoreCatalog(req.AuthData.userId, Tags);
+    if(!Catalog) return res.status(400).json({code: "400", message: "unsupported store tags"});
+    res.status(200).json(Catalog);
 });
+
+storeRouter.get("/token/platinum/:catalogId", HasUndauntedMetagameAuth, (req: any, res) => {
+    const Token = CreatePurchaseToken(req.AuthData.userId, req.params.catalogId, "platinum");
+    if(!Token){
+        LogFullAttempt(req, "Unsupported store SKU full request");
+        return res.status(404).json({code: "404", message: "unknown store product"});
+    }
+    res.status(200).json({purchaseToken: Token});
+});
+
+for(const Currency of ["markssteel", "marksgilded"] as PurchaseCurrency[]){
+    storeRouter.get(`/token/${Currency}/:catalogId`, HasUndauntedMetagameAuth, (req: any, res) => {
+        const Token = CreatePurchaseToken(req.AuthData.userId, req.params.catalogId, Currency);
+        if(!Token){
+            LogFullAttempt(req, "Unsupported store SKU full request");
+            return res.status(404).json({code: "404", message: "unknown store product or currency mismatch"});
+        }
+        res.status(200).json({purchaseToken: Token});
+    });
+}
+
+async function CompletePurchase(req: any, res: any, Currency?: PurchaseCurrency){
+    if(typeof req.query.token !== "string") return res.status(400).json({code: "400", message: "missing token query parameter"});
+    const Result = await PurchaseFromToken(req.AuthData.userId, req.query.token, Currency);
+    if(Result.success){
+        logger.info(`Completed Lady Luck purchase for ${req.AuthData.userId}`);
+        return res.status(204).send();
+    }
+    const Status = Result.error === "insufficient_funds" ? 402 : Result.error === "already_owned" ? 409 : Result.error === "db_error" ? 500 : 400;
+    res.status(Status).json({code: String(Status), message: Result.error});
+}
+
+storeRouter.post("/notification/platinum", HasUndauntedMetagameAuth, async (req: any, res) => {
+    return CompletePurchase(req, res, "platinum");
+});
+
+for(const Currency of ["markssteel", "marksgilded"] as PurchaseCurrency[])
+    storeRouter.post(`/notification/${Currency}`, HasUndauntedMetagameAuth, async (req: any, res) => CompletePurchase(req, res, Currency));
