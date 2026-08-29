@@ -1,6 +1,5 @@
 {
   "private": true,
-  "packageManager": "pnpm@11.13.0",
   "scripts": {
     "build:metagame": "pnpm --dir UndauntedMetagame run build",
     "build:deploy": "pnpm --dir UndauntedDeployServer run build",
