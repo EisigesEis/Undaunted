@@ -1,9 +1,15 @@
 {
   "name": "undaunteddeployserver",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "The deploy server for Undaunted",
   "license": "AGPL-3.0-only",
   "author": "gwog :3",
+  "contributors": [
+    {
+      "name": "EisigesEis",
+      "url": "https://github.com/EisigesEis/"
+    }
+  ],
   "scripts": {
     "dev": "tsx --env-file=.env src/server.ts",
     "build": "node build.cjs",
@@ -22,7 +28,7 @@
   "devDependencies": {
     "@types/express": "5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "26.0.0",
+    "@types/node": "26.4.0",
     "drizzle-kit": "0.31.10",
     "esbuild": "0.28.1",
     "tsx": "4.22.4",

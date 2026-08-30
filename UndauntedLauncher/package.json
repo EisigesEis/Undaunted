@@ -1,49 +1,37 @@
 {
-  "name": "undauntedlauncher",
+  "name": "undaunted-launcher",
   "productName": "Undaunted Launcher",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "A Launcher for the Undaunted Project",
-  "main": ".vite/build/main.js",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
-    "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx ."
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "build:release": "tauri build --bundles nsis",
+    "build:release:fast": "set \"CARGO_PROFILE_RELEASE_LTO=false\" && set \"CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16\" && set \"CARGO_PROFILE_RELEASE_PACKAGE_UNDAUNTED_LAUNCHER_OPT_LEVEL=0\" && tauri build --bundles nsis",
+    "check": "pnpm build",
+    "tauri": "tauri"
   },
-  "keywords": [],
   "author": {
     "name": "Gregory Morford",
     "email": "realsystemdev@gmail.com"
   },
+  "contributors": [
+    {
+      "name": "EisigesEis",
+      "url": "https://github.com/EisigesEis/"
+    }
+  ],
   "license": "AGPL-3.0-only",
-  "devDependencies": {
-    "@electron-forge/cli": "^7.11.2",
-    "@electron-forge/maker-deb": "^7.11.2",
-    "@electron-forge/maker-rpm": "^7.11.2",
-    "@electron-forge/maker-squirrel": "^7.11.2",
-    "@electron-forge/maker-zip": "^7.11.2",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
-    "@electron-forge/plugin-fuses": "^7.11.2",
-    "@electron-forge/plugin-vite": "^7.11.2",
-    "@electron/fuses": "^1.8.0",
-    "@types/electron-squirrel-startup": "^1.0.2",
-    "@typescript-eslint/eslint-plugin": "^5.62.0",
-    "@typescript-eslint/parser": "^5.62.0",
-    "electron": "43.0.0",
-    "eslint": "^8.57.1",
-    "eslint-plugin-import": "^2.32.0",
-    "typescript": "~4.5.4",
-    "vite": "^8.1.3"
-  },
   "dependencies": {
-    "@tailwindcss/cli": "^4.3.2",
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/yauzl": "^3.4.0",
-    "electron-squirrel-startup": "^1.0.1",
-    "flowbite": "^4.0.2",
-    "tailwindcss": "^4.3.2",
-    "yauzl": "^3.4.0"
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "26.4.0",
+    "typescript": "6.0.3",
+    "vite": "^8.1.3"
   }
 }

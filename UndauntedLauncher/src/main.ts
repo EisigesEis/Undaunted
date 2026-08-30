@@ -1,678 +1,728 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron';
-import path, { relative } from 'node:path';
-import started from 'electron-squirrel-startup';
-import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, promises, readdirSync, readFileSync, rm, rmSync, statfs, statfsSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { pipeline } from 'node:stream/promises';
-import yauzl from "yauzl";
-import { spawn } from 'node:child_process';
-import { kill } from 'node:process';
+import "./styles.css";
 
-const DAUNTLESS_144_EXE_HASH = "d3d41e614908d2befd518b27046d9822d6130ef12ba3504babbdb786bef9cff4";
-const DAUNTLESS_144_BASEGAME_ZIP_HASH = "556b9a648a5e5e7e11b6f8dd3d80ff8e88fceb0d3448297aaf47ce7bf756bc6d";
-const BYTES_REQUIRED_TO_INSTALL = 25 * 1024 * 1024 * 1024; // 25 GB
-const BASE_GAME_CDN_LINK = "https://undauntedcdn.nyc3.cdn.digitaloceanspaces.com/BaseGame144.zip"; // TODO: Swap to cdn.stayundaunted.com
-const CONST_LAUNCH_ARGS = ["-AUTH_LOGIN=unused", "-AUTH_TYPE=exchangecode", "-epicapp=appidlol", "-epicenv=Prod", "-EpicPortal", "-epicusername=usernamelol", "-epicuserid=useridlol", "-epiclocale=en-US", "-epicsandboxid=sandboxidlol", "-epicdeploymentid=deploymentidlol"];
-const BASE_API_URL = MAIN_WINDOW_VITE_DEV_SERVER_URL ? "http://127.0.0.1:60000" : "http://api.stayundaunted.com";
-const METAGAME_BASE_URL = MAIN_WINDOW_VITE_DEV_SERVER_URL ? "127.0.0.1:60000" : "api.stayundaunted.com";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { message, open } from "@tauri-apps/plugin-dialog";
+import {
+  isCommandError,
+  type AdminState,
+  type BackgroundAsset,
+  type CommandError,
+  type Dashboard,
+  type LauncherRoute,
+  type LauncherState,
+  type RegistrationMode,
+  type RegistrationResult,
+} from "./types";
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (started) {
-  app.quit();
-}
-
-nativeTheme.themeSource = "dark"; // Force dark mode to fixup launcher rendering issues
-
-let MainWindow: BrowserWindow;
-
-const createWindow = () => {
-  // Create the browser window.
-  MainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    icon: path.join(__dirname, "assets", "hootrly.png"),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-    },
-  });
-
-
-
-  // and load the index.html of the app.
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    MainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    MainWindow.removeMenu();
-    MainWindow.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    );
-  }
+const get = <T extends HTMLElement = HTMLElement>(id: string): T => {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`Missing #${id}`);
+  return node as T;
 };
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.on('ready', createWindow);
+const views = {
+  loading: get("loading-view"),
+  login: get("login-view"),
+  register: get("register-view"),
+  complete: get("registration-complete-view"),
+  install: get("install-view"),
+  play: get("play-view"),
+  admin: get("admin-view"),
+};
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+const loadingMessage = get("loading-message");
+const retryButton = get<HTMLButtonElement>("retry-button");
+const editUrlButton = get<HTMLButtonElement>("edit-url-button");
+const loginError = get("login-error");
+const registerError = get("register-error");
+const installError = get("install-error");
+const playError = get("play-error");
+const adminError = get("admin-error");
+const apiUrlInput = get<HTMLInputElement>("api-url");
+const playButton = get<HTMLButtonElement>("play-button");
+const stopButton = get<HTMLButtonElement>("stop-button");
+const adminButton = get<HTMLButtonElement>("admin-button");
+const backgroundVideo = get<HTMLVideoElement>("background-video");
+const backgroundCanvas = get<HTMLCanvasElement>("background-canvas");
+const availableBackgroundContext = backgroundCanvas.getContext("2d", { alpha: false, desynchronized: true });
+if (!availableBackgroundContext) throw new Error("Canvas video rendering is unavailable.");
+const backgroundContext: CanvasRenderingContext2D = availableBackgroundContext;
+const backgroundBlur = get("background-blur");
+const backgroundImage = get("background-image");
+const chooseBackgroundButton = get<HTMLButtonElement>("choose-background-button");
+const clearBackgroundButton = get<HTMLButtonElement>("clear-background-button");
+const fitBackgroundButton = get<HTMLButtonElement>("fit-background-button");
+const appWindow = getCurrentWindow();
 
-app.on('activate', () => {
-  // On OS X it's common to re-create a window in the app when the
-  // dock icon is clicked and there are no other windows open.
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
+const DEFAULT_WINDOW_SIZE = { width: 1080, height: 608 } as const;
+const MINIMUM_WINDOW_SIZE = { width: 900, height: 506 } as const;
+const FIT_BACKGROUND_STORAGE_KEY = "fit-background-to-window";
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and import them here.
+let registrationMode: RegistrationMode | null = null;
+let nextRoute: LauncherRoute = "install";
+let dashboardTimer: number | undefined;
+let processTimer: number | undefined;
+let videoFrameCallback: number | undefined;
+let fitBackground = localStorage.getItem(FIT_BACKGROUND_STORAGE_KEY) !== "false";
+let blurredSidelines = false;
+let activeMediaSize: { width: number; height: number } | null = null;
 
-type UserInfo = {
-    UserId: string;
-    Username: string;
-    IsAdmin: boolean;
-}
+const api = {
+  state: () => invoke<LauncherState>("get_launcher_state"),
+  config: () => invoke<[string, boolean]>("get_runtime_config"),
+  background: () => invoke<BackgroundAsset | null>("get_background"),
+  setBackground: (filePath: string) => invoke<BackgroundAsset>("set_background", { filePath }),
+  clearBackground: () => invoke<void>("clear_background"),
+  registrationMode: (apiUrl: string) =>
+    invoke<RegistrationMode>("get_registration_mode", { apiUrl }),
+  login: (apiKey: string, apiUrl: string) =>
+    invoke<LauncherState>("login", { apiKey, apiUrl }),
+  logout: () => invoke<LauncherState>("logout"),
+  register: (username: string, inviteCode: string | null, apiUrl: string) =>
+    invoke<RegistrationResult>("register_account", { username, inviteCode, apiUrl }),
+  migrate: (directory: string) =>
+    invoke<LauncherState>("migrate_legacy_install", { directory }),
+  useExistingInstall: (directory: string) =>
+    invoke<LauncherState>("use_existing_install", { directory }),
+  dashboard: () => invoke<Dashboard>("get_dashboard"),
+  adminState: () => invoke<AdminState>("get_admin_state"),
+  setRegistrationMode: (mode: RegistrationMode) =>
+    invoke<AdminState>("set_registration_mode", { mode }),
+  createInviteCode: (code: string, uses: number, infinite: boolean) =>
+    invoke<AdminState>("create_invite_code", { code, uses, infinite }),
+  deleteInviteCode: (code: string) =>
+    invoke<AdminState>("delete_invite_code", { code }),
+  launch: () => invoke<void>("launch_game"),
+  stop: () => invoke<void>("stop_game"),
+  running: () => invoke<boolean>("is_game_running"),
+};
 
-type PublicOnlineStatsResponse = {
-  NumActivePlayers: number
-}
-
-let DauntlessPID: number | undefined;
-
-let DauntlessWin64Path: string | undefined;
-let UndauntedUserAPIKey: string | undefined;
-
-async function MakeUndauntedApiRequest(Path: string, Method: string, Body: any | undefined){
-  let PostBody: string | undefined;
-  let ContentType = {};
-  let UserApiKey = {};
-
-  if(Body != undefined){
-    PostBody = JSON.stringify(Body)
-    ContentType = {
-      "content-type": "application/json"
-    };
-  }
-
-  if(UndauntedUserAPIKey != null){
-    UserApiKey = {
-      "x-undaunted-user-api-key": UndauntedUserAPIKey
-    };
-  }
-
-  const Response = await fetch(BASE_API_URL + Path, {
-    method: Method,
-    body: PostBody,
-    headers: {
-      ...UserApiKey,
-      ...ContentType
-    }
+function show(name: keyof typeof views): void {
+  stopPolling();
+  Object.entries(views).forEach(([key, node]) => {
+    node.hidden = key !== name;
   });
-
-  if(Response.status !== 200){
-    return {};
-  }
-
-  let RetResponse = {};
-
-  try{
-    RetResponse = await Response.json();
-  }
-  catch{
-
-  }
-
-  return RetResponse;
 }
 
-async function GetMyUserInfo(): Promise<UserInfo | undefined>{
-  if(UndauntedUserAPIKey == undefined){
-    return undefined;
+function asError(value: unknown): CommandError {
+  if (isCommandError(value)) return value;
+  if (value instanceof Error) return { code: "frontend", message: value.message, retryable: true };
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (isCommandError(parsed)) return parsed;
+    } catch {}
+    return { code: "unknown", message: value, retryable: true };
   }
-
-  const MyUserInfo: UserInfo = await MakeUndauntedApiRequest("/undaunted/api/GetUserInfo", "GET", undefined);
-
-  return MyUserInfo;
+  return { code: "unknown", message: "Unexpected launcher error.", retryable: true };
 }
 
-async function GetCurrentRegistrationMode(): Promise<string | undefined>{
-  const RegistrationModeResponse = await MakeUndauntedApiRequest("/undaunted/api/RegistrationStatus", "GET", undefined);
-
-  return RegistrationModeResponse?.RegistrationMode;
+function setError(node: HTMLElement, value?: unknown): void {
+  node.textContent = value ? asError(value).message : "";
+  node.hidden = !value;
 }
 
-async function SetCurrentRegistrationMode(RegistrationStatus: string){
-  LoadDataFile();
+function setRegistrationMode(mode: RegistrationMode | null): void {
+  registrationMode = mode;
+  get("registrations-closed").hidden = mode !== "NONE" && mode !== null;
+  get("registrations-invite").hidden = mode !== "INVITECODE";
+  get("registrations-open").hidden = mode !== "OPEN";
+  get("invite-code-panel").hidden = mode !== "INVITECODE";
+}
 
-  if(UndauntedUserAPIKey == undefined){
+async function applyState(state: LauncherState): Promise<void> {
+  setRegistrationMode(state.registrationMode);
+  // Never carry admin controls across accounts or routes while the dashboard loads.
+  adminButton.hidden = true;
+  show(state.route);
+  if (state.route === "play") {
+    await refreshDashboard(true);
+    startPolling();
+  }
+}
+
+function clearRenderedBackground(): void {
+  if (videoFrameCallback !== undefined) {
+    backgroundVideo.cancelVideoFrameCallback(videoFrameCallback);
+    videoFrameCallback = undefined;
+  }
+  backgroundVideo.pause();
+  backgroundVideo.onloadedmetadata = null;
+  backgroundVideo.onloadeddata = null;
+  backgroundVideo.oncanplay = null;
+  backgroundVideo.onerror = null;
+  backgroundVideo.removeAttribute("src");
+  backgroundVideo.load();
+  backgroundVideo.hidden = true;
+  backgroundCanvas.hidden = true;
+  backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  backgroundBlur.style.removeProperty("background-image");
+  backgroundBlur.hidden = true;
+  backgroundImage.style.removeProperty("background-image");
+  backgroundImage.classList.remove("background-image--contain");
+  backgroundImage.hidden = true;
+}
+
+function setBlurredSidelines(enabled: boolean): void {
+  blurredSidelines = enabled;
+  backgroundImage.classList.toggle("background-image--contain", enabled);
+  backgroundBlur.hidden = !enabled || backgroundImage.hidden;
+}
+
+function updateFitButton(): void {
+  fitBackgroundButton.textContent = `Fit: ${fitBackground ? "On" : "Off"}`;
+  fitBackgroundButton.setAttribute("aria-pressed", String(fitBackground));
+}
+
+async function resizeWindowForBackground(width: number, height: number): Promise<void> {
+  activeMediaSize = { width, height };
+  if (!fitBackground) {
+    setBlurredSidelines(false);
+    await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_SIZE.width, DEFAULT_WINDOW_SIZE.height));
+    await appWindow.center();
     return;
   }
 
-  await MakeUndauntedApiRequest("/undaunted/api/RegistrationStatus", "POST", {
-    RegistrationStatus: RegistrationStatus
+  const monitor = await currentMonitor();
+  const workArea = monitor?.workArea.size.toLogical(monitor.scaleFactor);
+  const maximumWidth = Math.max(1, Math.floor((workArea?.width ?? DEFAULT_WINDOW_SIZE.width) * .94));
+  const maximumHeight = Math.max(1, Math.floor((workArea?.height ?? DEFAULT_WINDOW_SIZE.height) * .94));
+  const aspectRatio = width / height;
+
+  let targetHeight: number = DEFAULT_WINDOW_SIZE.height;
+  let targetWidth: number = targetHeight * aspectRatio;
+  if (targetWidth < MINIMUM_WINDOW_SIZE.width) {
+    targetWidth = MINIMUM_WINDOW_SIZE.width;
+    targetHeight = targetWidth / aspectRatio;
+  }
+  if (targetHeight < MINIMUM_WINDOW_SIZE.height) {
+    targetHeight = MINIMUM_WINDOW_SIZE.height;
+    targetWidth = targetHeight * aspectRatio;
+  }
+  const downscale = Math.min(1, maximumWidth / targetWidth, maximumHeight / targetHeight);
+  targetWidth *= downscale;
+  targetHeight *= downscale;
+
+  const exactFitIsSafe =
+    targetWidth >= MINIMUM_WINDOW_SIZE.width &&
+    targetHeight >= MINIMUM_WINDOW_SIZE.height;
+  if (!exactFitIsSafe) {
+    targetWidth = Math.min(DEFAULT_WINDOW_SIZE.width, maximumWidth);
+    targetHeight = Math.min(DEFAULT_WINDOW_SIZE.height, maximumHeight);
+  }
+
+  setBlurredSidelines(!exactFitIsSafe);
+  await appWindow.setSize(new LogicalSize(Math.round(targetWidth), Math.round(targetHeight)));
+  await appWindow.center();
+}
+
+function loadImageSize(source: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => reject(new Error("The selected background image could not be decoded."));
+    image.src = source;
   });
 }
 
-type InviteCode = {
-  inviteCode: string;
-  usesRemaining: number;
-  infiniteUses: boolean;
-}
+function drawBackgroundVideoFrame(): void {
+  videoFrameCallback = undefined;
+  if (document.hidden || backgroundVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const sourceWidth = backgroundVideo.videoWidth;
+  const sourceHeight = backgroundVideo.videoHeight;
+  if (sourceWidth < 1 || sourceHeight < 1) return;
 
-async function AddInviteCode(InviteCode: string, Uses: number, InfiniteUses: boolean){
-  await MakeUndauntedApiRequest("/undaunted/api/RegisterInviteCode", "POST", {
-    NewInviteCode: InviteCode,
-    Uses: Uses,
-    InfiniteUses: InfiniteUses
-  });
-}
-
-async function DeleteInviteCode(InviteCode: string){
-  await MakeUndauntedApiRequest(`/undaunted/api/InviteCode/${InviteCode}`, "DELETE", undefined);
-}
-
-async function GetInviteCodes(): Promise<InviteCode[] | undefined>{
-  if(UndauntedUserAPIKey == undefined){
-    return undefined;
+  const targetWidth = Math.max(1, Math.round(window.innerWidth));
+  const targetHeight = Math.max(1, Math.round(window.innerHeight));
+  if (backgroundCanvas.width !== targetWidth || backgroundCanvas.height !== targetHeight) {
+    backgroundCanvas.width = targetWidth;
+    backgroundCanvas.height = targetHeight;
   }
 
-  const InviteCodes = await MakeUndauntedApiRequest("/undaunted/api/InviteCodes", "GET", undefined);
-  
-  return InviteCodes.InviteCodes;
-}
-
-async function GetPublicStats(): Promise<PublicOnlineStatsResponse | undefined>{
-  if(UndauntedUserAPIKey == undefined){
-    return undefined;
+  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const cropWidth = targetWidth / scale;
+  const cropHeight = targetHeight / scale;
+  const cropX = (sourceWidth - cropWidth) / 2;
+  const cropY = (sourceHeight - cropHeight) / 2;
+  if (blurredSidelines) {
+    backgroundContext.save();
+    backgroundContext.filter = "blur(24px)";
+    backgroundContext.drawImage(
+      backgroundVideo,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      -32,
+      -32,
+      targetWidth + 64,
+      targetHeight + 64,
+    );
+    backgroundContext.restore();
+    const containScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+    const containedWidth = sourceWidth * containScale;
+    const containedHeight = sourceHeight * containScale;
+    backgroundContext.drawImage(
+      backgroundVideo,
+      (targetWidth - containedWidth) / 2,
+      (targetHeight - containedHeight) / 2,
+      containedWidth,
+      containedHeight,
+    );
+  } else {
+    backgroundContext.drawImage(
+      backgroundVideo,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      targetWidth,
+      targetHeight,
+    );
   }
-
-  const PublicOnlineStats: PublicOnlineStatsResponse = await MakeUndauntedApiRequest("/undaunted/api/PublicOnlineStats", "GET", undefined);
-
-  return PublicOnlineStats;
+  backgroundCanvas.hidden = false;
+  scheduleBackgroundVideoFrame();
 }
 
-function LoadDataFile(){
-  const UserDataPath = path.join(app.getPath("userData"), "config.json");
+function scheduleBackgroundVideoFrame(): void {
+  if (
+    videoFrameCallback === undefined &&
+    !document.hidden &&
+    !backgroundVideo.hidden
+  ) {
+    videoFrameCallback = backgroundVideo.requestVideoFrameCallback(drawBackgroundVideoFrame);
+  }
+}
 
-  if(!existsSync(UserDataPath)){
+async function startBackgroundVideo(source: string): Promise<void> {
+  let layoutReady: Promise<void> | null = null;
+  const ensureLayout = (): Promise<void> => {
+    layoutReady ??= resizeWindowForBackground(
+      backgroundVideo.videoWidth,
+      backgroundVideo.videoHeight,
+    );
+    return layoutReady;
+  };
+  const play = (): void => {
+    if (document.hidden || backgroundVideo.error) return;
+    backgroundVideo.muted = true;
+    backgroundVideo.defaultMuted = true;
+    backgroundVideo.volume = 0;
+    void ensureLayout()
+      .catch(() => setBlurredSidelines(true))
+      .then(() => backgroundVideo.play())
+      .then(scheduleBackgroundVideoFrame)
+      .catch(() => undefined);
+  };
+
+  backgroundVideo.preload = "auto";
+  backgroundVideo.hidden = false;
+  backgroundVideo.onloadedmetadata = play;
+  backgroundVideo.onloadeddata = play;
+  backgroundVideo.oncanplay = play;
+  backgroundVideo.onerror = () => {
+    backgroundCanvas.hidden = true;
+  };
+  backgroundVideo.src = source;
+  backgroundVideo.load();
+}
+
+async function applyBackground(background: BackgroundAsset | null): Promise<void> {
+  clearRenderedBackground();
+  clearBackgroundButton.hidden = background === null;
+  fitBackgroundButton.hidden = background === null;
+  updateFitButton();
+  activeMediaSize = null;
+  if (!background) {
+    setBlurredSidelines(false);
+    await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_SIZE.width, DEFAULT_WINDOW_SIZE.height));
+    await appWindow.center();
     return;
   }
-
-  const UserData = JSON.parse(readFileSync(UserDataPath).toString());
-
-  DauntlessWin64Path = UserData.DauntlessWin64Path;
-  UndauntedUserAPIKey = UserData.UndauntedUserAPIKey;
+  const source = convertFileSrc(background.path);
+  if (background.mediaType === "image") {
+    const size = await loadImageSize(source);
+    backgroundBlur.style.backgroundImage = `url(${JSON.stringify(source)})`;
+    backgroundImage.style.backgroundImage = `url(${JSON.stringify(source)})`;
+    backgroundImage.hidden = false;
+    await resizeWindowForBackground(size.width, size.height);
+    return;
+  }
+  await startBackgroundVideo(source);
 }
 
-function WriteDataFile(){
-  const UserDataPath = path.join(app.getPath("userData"), "config.json");
+function syncBackgroundPlaybackWithVisibility(): void {
+  if (document.hidden) {
+    backgroundVideo.pause();
+    stopPolling();
+  } else if (!backgroundVideo.hidden) {
+    void backgroundVideo.play().then(() => {
+      scheduleBackgroundVideoFrame();
+    }).catch(() => undefined);
+    if (!views.play.hidden) startPolling();
+  } else if (!views.play.hidden) {
+    startPolling();
+  }
+}
 
-  const UserData = JSON.stringify({
-    DauntlessWin64Path: DauntlessWin64Path,
-    UndauntedUserAPIKey: UndauntedUserAPIKey,
+async function initializeBackground(): Promise<void> {
+  try {
+    await applyBackground(await api.background());
+  } catch {
+    clearRenderedBackground();
+  }
+}
+
+async function loadState(): Promise<void> {
+  show("loading");
+  retryButton.hidden = true;
+  loadingMessage.textContent = "Connecting…";
+  try {
+    const [apiUrl, hasSavedApiKey] = await api.config();
+    apiUrlInput.value = apiUrl;
+    get<HTMLInputElement>("api-key").placeholder = hasSavedApiKey
+      ? "Saved API key will be used"
+      : "UUK••••••••";
+    await applyState(await api.state());
+  } catch (error) {
+    const failure = asError(error);
+    show("login");
+    setError(loginError, failure);
+    editUrlButton.hidden = false;
+  }
+}
+
+async function choose(title: string): Promise<string | null> {
+  const selected = await open({ title, directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+async function chooseBackground(): Promise<void> {
+  chooseBackgroundButton.disabled = true;
+  try {
+    const selected = await open({
+      title: "Choose your launcher background",
+      multiple: false,
+      filters: [{ name: "Images and videos", extensions: ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "ogv"] }],
+    });
+    if (typeof selected !== "string") return;
+    const background = await api.setBackground(selected);
+    await applyBackground(background);
+  } catch (error) {
+    await message(asError(error).message, { title: "Background", kind: "error" });
+  } finally {
+    chooseBackgroundButton.disabled = false;
+  }
+}
+
+async function resetBackground(): Promise<void> {
+  clearBackgroundButton.disabled = true;
+  try {
+    await api.clearBackground();
+    await applyBackground(null);
+  } catch (error) {
+    await message(asError(error).message, { title: "Background", kind: "error" });
+  } finally {
+    clearBackgroundButton.disabled = false;
+  }
+}
+
+async function toggleBackgroundFit(): Promise<void> {
+  fitBackground = !fitBackground;
+  localStorage.setItem(FIT_BACKGROUND_STORAGE_KEY, String(fitBackground));
+  updateFitButton();
+  if (!activeMediaSize) return;
+  fitBackgroundButton.disabled = true;
+  try {
+    await resizeWindowForBackground(activeMediaSize.width, activeMediaSize.height);
+  } catch (error) {
+    await message(asError(error).message, { title: "Background Fit", kind: "error" });
+  } finally {
+    fitBackgroundButton.disabled = false;
+  }
+}
+
+async function refreshRegistrationMode(): Promise<void> {
+  setError(loginError);
+  try {
+    setRegistrationMode(await api.registrationMode(apiUrlInput.value.trim()));
+  } catch (error) {
+    setRegistrationMode(null);
+    setError(loginError, error);
+  }
+}
+
+async function migrate(): Promise<void> {
+  const target = views.register.hidden ? loginError : registerError;
+  setError(target);
+  try {
+    const directory = await choose(
+      'Select the legacy folder containing "Archon", "EasyAntiCheat", and "Engine".',
+    );
+    if (directory) await applyState(await api.migrate(directory));
+  } catch (error) {
+    setError(target, error);
+  }
+}
+
+async function useExistingInstall(): Promise<void> {
+  const button = get<HTMLButtonElement>("existing-install-button");
+  setError(installError);
+  button.disabled = true;
+  try {
+    const directory = await choose("Select your existing Dauntless installation");
+    if (directory) await applyState(await api.useExistingInstall(directory));
+  } catch (error) {
+    setError(installError, error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function setRunning(running: boolean): void {
+  playButton.hidden = running;
+  stopButton.hidden = !running;
+}
+
+async function refreshDashboard(showFailure: boolean): Promise<void> {
+  try {
+    const data = await api.dashboard();
+    get("home-username").textContent = `Welcome Back, ${data.username}`;
+    get("version-text").textContent = data.version;
+    get("player-count-text").textContent =
+      `${data.onlinePlayers} Player${data.onlinePlayers === 1 ? "" : "s"} Online`;
+    adminButton.hidden = !data.isAdmin;
+    setRunning(data.gameRunning);
+    setError(playError);
+  } catch (error) {
+    if (showFailure) setError(playError, error);
+  }
+}
+
+function startPolling(): void {
+  if (document.hidden || (dashboardTimer !== undefined && processTimer !== undefined)) return;
+  stopPolling();
+  dashboardTimer = window.setInterval(() => void refreshDashboard(false), 60_000);
+  processTimer = window.setInterval(
+    () => void api.running().then(setRunning).catch(() => undefined),
+    2_000,
+  );
+}
+
+function stopPolling(): void {
+  if (dashboardTimer !== undefined) window.clearInterval(dashboardTimer);
+  if (processTimer !== undefined) window.clearInterval(processTimer);
+  dashboardTimer = processTimer = undefined;
+}
+
+function renderAdmin(state: AdminState): void {
+  get<HTMLSelectElement>("registration-mode").value = state.registrationMode;
+  const list = get("invite-code-list");
+  list.replaceChildren();
+  get("invite-code-empty").hidden = state.inviteCodes.length !== 0;
+  for (const invite of state.inviteCodes) {
+    const row = document.createElement("div");
+    row.className = "invite-row";
+    const code = document.createElement("span");
+    code.className = "invite-row__code";
+    code.textContent = invite.inviteCode;
+    const uses = document.createElement("span");
+    uses.className = "muted";
+    uses.textContent = invite.infiniteUses ? "Infinite uses" : `${invite.usesRemaining} uses remaining`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "button button--danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", () => void removeInvite(invite.inviteCode, remove));
+    row.append(code, uses, remove);
+    list.append(row);
+  }
+}
+
+async function openAdmin(): Promise<void> {
+  show("admin");
+  setError(adminError);
+  try {
+    renderAdmin(await api.adminState());
+  } catch (error) {
+    setError(adminError, error);
+  }
+}
+
+async function removeInvite(code: string, button: HTMLButtonElement): Promise<void> {
+  const choice = await message(`Delete invite code “${code}”?`, {
+    title: "Delete Invite Code",
+    kind: "warning",
+    buttons: { ok: "Delete", cancel: "Cancel" },
   });
-
-  writeFileSync(UserDataPath, UserData);
-}
-
-function HashFile(FilePath: string){
-  const File = readFileSync(FilePath);
-
-  return createHash("sha256").update(File).digest("hex");
-}
-
-function HashFileAsync(FilePath: string){
-  return new Promise((Resolve, Reject) => {
-    const Hash = createHash("sha256");
-    const Stream = createReadStream(FilePath);
-
-    Stream.on("data", Chunk => Hash.update(Chunk));
-    Stream.on("error", Reject);
-    Stream.on("end", () => Resolve(Hash.digest("hex")));
-  })
-}
-
-async function MigrateLegacyUndauntedInstall(){
-  const DialogResult = dialog.showOpenDialogSync({properties: ["openDirectory"], title: "Select where your Legacy Undaunted install is, the folder you select should contain the \"Archon\", \"EasyAntiCheat\", and \"Engine\" folders."});
-
-  if(DialogResult == undefined){
-    return false;
-  }
-
-  const LegacyUndauntedDirectory = DialogResult[0];
-
-  const ExePath = path.join(LegacyUndauntedDirectory, "Archon", "Binaries", "Win64", "Dauntless-Win64-Shipping.exe");
-
-  if(!existsSync(ExePath)){
-    return false;
-  }
-
-  const ExeHash = HashFile(ExePath);
-
-  if(ExeHash !== DAUNTLESS_144_EXE_HASH){
-    return false;
-  }
-
-  const Win64Folder = path.join(LegacyUndauntedDirectory, "Archon", "Binaries", "Win64");
-
-  const BatFileResults = readdirSync(Win64Folder, {withFileTypes: true}).filter((FileOrFolder) => {
-    return FileOrFolder.isFile() && FileOrFolder.name.includes(".bat");
-  });
-  
-  if(BatFileResults.length !== 1){
-    return false;
-  }
-
-  const BatFilePath = path.join(Win64Folder, BatFileResults[0].name);
-
-  const BatFileConents = readFileSync(BatFilePath, "utf-8");
-
-  const Args = BatFileConents.split(" ");
-
-  let UserApiKey;
-
-  for(const Arg of Args){
-    if(Arg.includes("UUK")){
-      UserApiKey = Arg.split("=")[1];
-      break;
-    }
-  }
-
-  if(UserApiKey == undefined){
-    return false;
-  }
-
-  UndauntedUserAPIKey = UserApiKey;
-  DauntlessWin64Path = Win64Folder;
-
-  WriteDataFile();
-  
-  return await PatchUndauntedInstall();
-}
-
-function PatchUndauntedInstall(){
-  if(DauntlessWin64Path == undefined){
-    return false;
-  }
-
-  const ResourcesPath = app.isPackaged ? process.resourcesPath : path.join(process.cwd(), "assets");
-
-  const DxgiInResources = path.join(ResourcesPath, "dxgi.dll");
-  const UndauntedInternalServerInResource = path.join(ResourcesPath, "UndauntedInternalServer.dll");
-
-  const DxgiDest = path.join(DauntlessWin64Path, "dxgi.dll");
-  const UndauntedInternalServerDest = path.join(DauntlessWin64Path, "UndauntedInternalServer.dll");
-
-  copyFileSync(DxgiInResources, DxgiDest);
-  copyFileSync(UndauntedInternalServerInResource, UndauntedInternalServerDest);
-
-  return true;
-}
-
-async function ValidateUndauntedUserApiKey(ApiKey: string){
-  UndauntedUserAPIKey = ApiKey;
-
-  const Ret = (await GetMyUserInfo())?.UserId != undefined;
-
-  return Ret;
-}
-
-function HasEnoughFreeSpace(InstallPath: string){
-  const Stats = statfsSync(InstallPath, {
-    bigint: true
-  });
-
-  const FreeBytes = Stats.bfree * Stats.bsize;
-
-  return FreeBytes >= BYTES_REQUIRED_TO_INSTALL;
-}
-
-async function DownloadAndInstallUndaunted(){
-  const DialogResult = dialog.showOpenDialogSync({properties: ["openDirectory"], title: "Select the folder where you want to install Undaunted!"});
-
-  if(DialogResult?.length !== 1){
-    return false;
-  }
-
-  const InstallLocation = DialogResult[0];
-
-  if(existsSync(path.join(InstallLocation, "Archon", "Binaries", "Win64"))){
-    if(await HashFileAsync(path.join(InstallLocation, "Archon", "Binaries", "Win64", "Dauntless-Win64-Shipping.exe")) !== DAUNTLESS_144_EXE_HASH){
-      return false;
-    }
-    
-    DauntlessWin64Path = path.join(InstallLocation, "Archon", "Binaries", "Win64");
-
-    WriteDataFile();
-
-    const Return = await PatchUndauntedInstall();
-
-    if(Return){
-      MainWindow.webContents.send("DownloadUpdate", "Done", 0);
-    }
-
-    return Return;
-  }
-
-  if(!HasEnoughFreeSpace(InstallLocation)){
-    return false;
-  }
-
-  const TempFile = path.join(InstallLocation, "temp.zip");
-  const TempFileStream = createWriteStream(TempFile);
-
-  const Response = await fetch(BASE_GAME_CDN_LINK);
-  const TotalBytes = Number(Response.headers.get("content-length"));
-  let DownloadedBytes = 0;
-  let LastSentAt = Date.now();
-
-  const ProgressStream = new TransformStream({
-    transform(Chunk, Controller){
-      DownloadedBytes = DownloadedBytes + Chunk.byteLength;
-
-      const Now = Date.now();
-
-      if(Now - LastSentAt > 250){
-        LastSentAt = Now;
-
-        const Progress = Math.round((DownloadedBytes / TotalBytes) * 100);
-
-        MainWindow.webContents.send("DownloadUpdate", "Download", Progress);
-      }
-
-      Controller.enqueue(Chunk);
-    }
-  });
-
-  await pipeline(Response.body!.pipeThrough(ProgressStream), TempFileStream);
-
-  MainWindow.webContents.send("DownloadUpdate", "Verify", 0);
-
-  const ZipHash = await HashFileAsync(TempFile);
-
-  if(ZipHash !== DAUNTLESS_144_BASEGAME_ZIP_HASH){
-    rmSync(TempFile);
-
-    return false;
-  }
-
-  const TempZipFile = await yauzl.openPromise(TempFile, {lazyEntries: true});
-
-  const TotalNumEntries = TempZipFile.entryCount;
-  let NumEntriesExtracted = 0;
-
-  for await (const Entry of TempZipFile.eachEntry()){
-    const EntryFileName = Entry.fileName;
-
-    const BaseInstallDir = path.resolve(InstallLocation);
-
-    const Destination = path.resolve(InstallLocation, EntryFileName);
-
-    const RelativePath = path.relative(BaseInstallDir, Destination);
-
-    if(RelativePath === "" || RelativePath.startsWith("..") || path.isAbsolute(RelativePath)){
-      TempZipFile.close();
-
-      rmSync(TempFile);
-
-      return false;
-    }
-
-    console.log(Destination);
-
-    if(EntryFileName.endsWith("/")){
-      mkdirSync(Destination, {recursive: true});
-
-      continue;
-    }
-
-    mkdirSync(path.dirname(Destination), {recursive: true});
-
-    const ReadStream = await TempZipFile.openReadStreamPromise(Entry);
-    const WriteStream = createWriteStream(Destination);
-
-    await pipeline(ReadStream, WriteStream);
-
-    NumEntriesExtracted = NumEntriesExtracted + 1;
-
-    MainWindow.webContents.send("DownloadUpdate", "Install", Math.round((NumEntriesExtracted / TotalNumEntries) * 100));
-  }
-
-  TempZipFile.close();
-
-  rmSync(TempFile);
-
-  const InstalledWin64 = path.join(InstallLocation, "Dauntless", "Archon", "Binaries", "Win64");
-
-  DauntlessWin64Path = InstalledWin64;
-
-  WriteDataFile();
-
-  const Return = await PatchUndauntedInstall();
-
-  if(Return){
-    MainWindow.webContents.send("DownloadUpdate", "Done", 0);
-  }
-
-  return Return;
-}
-
-function RunUndaunted(){
-  const DauntlessProcess = spawn(path.join(DauntlessWin64Path!, "Dauntless-Win64-Shipping.exe"), [METAGAME_BASE_URL, `-AUTH_PASSWORD=${UndauntedUserAPIKey!}`, ...CONST_LAUNCH_ARGS]);
-
-  DauntlessPID = DauntlessProcess.pid!;
-}
-
-function StopUndaunted(){
-  kill(DauntlessPID!);
-}
-
-function IsUndauntedRunning(){
-  if(DauntlessPID == undefined){
-    return false;
-  }
-
-  let Running = true;
-
-  try{
-    kill(DauntlessPID!, 0);
-  }catch(e){
-    Running = false;
-    DauntlessPID = undefined;
-  }
-
-  return Running;
-}
-
-async function Login(ApiKey: string){
-  if(await ValidateUndauntedUserApiKey(ApiKey)){
-    UndauntedUserAPIKey = ApiKey;
-
-    WriteDataFile();
+  if (choice !== "Delete") return;
+  button.disabled = true;
+  setError(adminError);
+  try {
+    renderAdmin(await api.deleteInviteCode(code));
+  } catch (error) {
+    setError(adminError, error);
+    button.disabled = false;
   }
 }
 
-function Logout(){
-  UndauntedUserAPIKey = undefined;
-
-  WriteDataFile();
-}
-
-type RegistrationResponse = {
-  UUK: string
-}
-
-async function RegisterAccount(Username: string, InviteCode: string | undefined): Promise<string | undefined>{
-  const RegistrationResponse: RegistrationResponse | undefined = await MakeUndauntedApiRequest("/undaunted/api/Register", "POST", {
-    Username: Username,
-    InviteCode: InviteCode
-  }) as RegistrationResponse;
-
-  const UUK = RegistrationResponse?.UUK;
-
-  await Login(UUK);
-
-  return UUK;
-}
-
-async function ValidateWin64Path(Path: string){
-  const ExePath = path.join(Path, "Dauntless-Win64-Shipping.exe");
-
-  if(!existsSync(Path) || !existsSync(ExePath)){
-    return false;
-  }
-
-  if(await HashFileAsync(ExePath) !== DAUNTLESS_144_EXE_HASH){
-    return false;
-  }
-
-  return true;
-}
-
-async function GetState(){
-  if(UndauntedUserAPIKey == undefined || !await ValidateUndauntedUserApiKey(UndauntedUserAPIKey)){
-    return "LOGIN";
-  }
-  else if(DauntlessWin64Path == undefined || !(await ValidateWin64Path(DauntlessWin64Path))){
-    return "INSTALL";
-  }
-  else{
-    return "PLAY";
-  }
-}
-
-async function GetVersion(){
-  const Response = await MakeUndauntedApiRequest("/dauntless-status", "GET", undefined);
-
-  const VersionString = (Response as any).en as string;
-
-  return VersionString.substring(10).slice(0, -1);
-}
-
-ipcMain.handle("MigrateLegacyUndauntedInstall", async () => {
-  if(await MigrateLegacyUndauntedInstall()){
-    console.log("Migrated");
-  }
-  else{
-    console.log("Failed");
+get<HTMLFormElement>("login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = get<HTMLButtonElement>("login-button");
+  const input = get<HTMLInputElement>("api-key");
+  setError(loginError);
+  button.disabled = true;
+  try {
+    await applyState(await api.login(input.value.trim(), apiUrlInput.value.trim()));
+    input.value = "";
+  } catch (error) {
+    setError(loginError, error);
+  } finally {
+    button.disabled = false;
   }
 });
 
-ipcMain.handle("PatchUndauntedInstall", async () => {
-  LoadDataFile();
-
-  if(PatchUndauntedInstall()){
-    console.log("Patched");
+get<HTMLFormElement>("register-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = get<HTMLButtonElement>("register-button");
+  const username = get<HTMLInputElement>("username").value.trim();
+  const invite = get<HTMLInputElement>("invite-code").value.trim();
+  setError(registerError);
+  if (!username) return setError(registerError, "Enter a username.");
+  if (registrationMode === "INVITECODE" && !invite)
+    return setError(registerError, "Enter an invite code.");
+  button.disabled = true;
+  try {
+    const result = await api.register(username, invite || null, apiUrlInput.value.trim());
+    nextRoute = result.nextRoute;
+    get("registration-complete-text").textContent =
+      `Your User API Key is "${result.apiKey}". Keep it safe; it will not be shown again.`;
+    show("complete");
+  } catch (error) {
+    setError(registerError, error);
+  } finally {
+    button.disabled = false;
   }
-  else{
-    console.log("Failed");
+});
+
+get<HTMLFormElement>("registration-mode-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = get<HTMLButtonElement>("save-registration-mode");
+  const mode = get<HTMLSelectElement>("registration-mode").value as RegistrationMode;
+  button.disabled = true;
+  setError(adminError);
+  try {
+    renderAdmin(await api.setRegistrationMode(mode));
+  } catch (error) {
+    setError(adminError, error);
+  } finally {
+    button.disabled = false;
   }
-})
+});
 
-ipcMain.on("DownloadAndInstallUndaunted", async (event) => {
-  if(await DownloadAndInstallUndaunted()){
-    console.log("Download Complete");
+get<HTMLFormElement>("invite-code-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = get<HTMLButtonElement>("add-invite-code");
+  const codeInput = get<HTMLInputElement>("new-invite-code");
+  const usesInput = get<HTMLInputElement>("new-invite-uses");
+  const infinite = get<HTMLInputElement>("new-invite-infinite").checked;
+  const uses = Number.parseInt(usesInput.value, 10);
+  setError(adminError);
+  if (!codeInput.value.trim()) return setError(adminError, "Enter an invite code.");
+  if (!infinite && (!Number.isInteger(uses) || uses < 1))
+    return setError(adminError, "Invite codes need at least one use.");
+  button.disabled = true;
+  try {
+    renderAdmin(await api.createInviteCode(codeInput.value.trim(), infinite ? 0 : uses, infinite));
+    codeInput.value = "";
+  } catch (error) {
+    setError(adminError, error);
+  } finally {
+    button.disabled = false;
   }
-  else{
-    console.log("Failed");
+});
+
+get("registration-complete-close-button").addEventListener("click", () => {
+  get("registration-complete-text").textContent = "";
+  void applyState({ route: nextRoute, registrationMode: null });
+});
+get("invite-register-button").addEventListener("click", () => show("register"));
+get("open-register-button").addEventListener("click", () => show("register"));
+get("back-to-login-button").addEventListener("click", () => show("login"));
+get("migrate-login-button").addEventListener("click", () => void migrate());
+get("migrate-register-button").addEventListener("click", () => void migrate());
+get("existing-install-button").addEventListener("click", () => void useExistingInstall());
+apiUrlInput.addEventListener("change", () => void refreshRegistrationMode());
+editUrlButton.addEventListener("click", () => {
+  editUrlButton.hidden = true;
+  setError(loginError);
+  show("login");
+  apiUrlInput.focus();
+});
+retryButton.addEventListener("click", () => void loadState());
+adminButton.addEventListener("click", () => void openAdmin());
+get("back-to-play-button").addEventListener("click", () => {
+  show("play");
+  startPolling();
+});
+chooseBackgroundButton.addEventListener("click", () => void chooseBackground());
+clearBackgroundButton.addEventListener("click", () => void resetBackground());
+fitBackgroundButton.addEventListener("click", () => void toggleBackgroundFit());
+document.addEventListener("visibilitychange", syncBackgroundPlaybackWithVisibility);
+window.addEventListener("focus", syncBackgroundPlaybackWithVisibility);
+
+get<HTMLButtonElement>("minimize-window-button").addEventListener("click", () => {
+  void appWindow.minimize();
+});
+get<HTMLButtonElement>("close-window-button").addEventListener("click", () => {
+  void appWindow.close();
+});
+
+playButton.addEventListener("click", async () => {
+  playButton.disabled = true;
+  setError(playError);
+  try {
+    await api.launch();
+    setRunning(true);
+  } catch (error) {
+    setError(playError, error);
+  } finally {
+    playButton.disabled = false;
   }
-})
+});
 
-ipcMain.handle("PlayUndaunted", async (event) => {
-  LoadDataFile();
+stopButton.addEventListener("click", async () => {
+  stopButton.disabled = true;
+  try {
+    await api.stop();
+    setRunning(false);
+  } catch (error) {
+    if (asError(error).code === "not_running") setRunning(false);
+    else setError(playError, error);
+  } finally {
+    stopButton.disabled = false;
+  }
+});
 
-  await PatchUndauntedInstall();
+get<HTMLButtonElement>("logout-button").addEventListener("click", async () => {
+  try {
+    await applyState(await api.logout());
+  } catch (error) {
+    show("loading");
+    const failure = asError(error);
+    loadingMessage.textContent = failure.message;
+    retryButton.hidden = !failure.retryable;
+  }
+});
 
-  RunUndaunted();
+window.addEventListener("beforeunload", stopPolling);
 
-  console.log("Launched Undaunted!");
-})
-
-ipcMain.handle("GetUndauntedUsername", async (event) => {
-  LoadDataFile();
-
-  const MyUserInfo: UserInfo | undefined = await GetMyUserInfo();
-
-  return MyUserInfo?.Username;
-})
-
-ipcMain.handle("GetCurrentRegistrationMode", async (event) => {
-  const RegistrationModeResponse = await GetCurrentRegistrationMode();
-
-  return RegistrationModeResponse;
-})
-
-ipcMain.handle("SetCurrentRegistrationMode", async (event, mode: string) => {
-  await SetCurrentRegistrationMode(mode);
-})
-
-ipcMain.handle("GetInviteCodes", async (event) => {
-  const InviteCodes = await GetInviteCodes();
-
-  return InviteCodes;
-})
-
-ipcMain.handle("GetIsAdmin", async (event) => {
-  LoadDataFile();
-
-  const MyUserInfo: UserInfo | undefined = await GetMyUserInfo();
-
-  return MyUserInfo?.IsAdmin;
-})
-
-ipcMain.handle("GetPlayerCount", async (event) => {
-  LoadDataFile();
-
-  const PublicOnlineStats: PublicOnlineStatsResponse | undefined = await GetPublicStats();
-
-  return PublicOnlineStats?.NumActivePlayers;
-})
-
-ipcMain.handle("StopUndaunted", async (event) => {
-  LoadDataFile();
-
-  StopUndaunted();
-
-  console.log("Exited Undaunted Process!");
-})
-
-ipcMain.handle("RegisterInviteCode", async (event, InviteCode: string, Uses: number, IsInfinite: boolean) => {
-  await AddInviteCode(InviteCode, Uses, IsInfinite);
-})
-
-ipcMain.handle("DeleteInviteCode", async (event, InviteCode: string) => {
-  await DeleteInviteCode(InviteCode);
-})
-
-ipcMain.handle("Login", async (event, ApiKey: string) => {
-  await Login(ApiKey);
-})
-
-ipcMain.handle("Logout", async (event) => {
-  Logout();
-})
-
-ipcMain.handle("GetState", async (event) => {
-  LoadDataFile();
-
-  return GetState();
-})
-
-ipcMain.handle("GetIsUndauntedRunning", async (event) => {
-  return await IsUndauntedRunning();
-})
-
-ipcMain.handle("GetVersion", async (event) => {
-  return await GetVersion();
-})
-
-ipcMain.handle("RegisterAccount", async (event, Username, InviteCode) => {
-  return await RegisterAccount(Username, InviteCode);
-})
+Promise.all([initializeBackground(), loadState()]).catch((error) => {
+  show("loading");
+  loadingMessage.textContent = asError(error).message;
+  retryButton.hidden = false;
+});

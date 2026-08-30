@@ -1,0 +1,37 @@
+[package]
+name = "undaunted-launcher"
+version = "0.0.6"
+description = "Undaunted Launcher"
+authors = ["Gregory Morford <realsystemdev@gmail.com>"]
+license = "AGPL-3.0-only"
+edition = "2024"
+
+[lib]
+name = "undaunted_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "6"
+keyring = { version = "4.1", default-features = false, features = ["v1", "windows-native-keyring-store"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+url = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = false
+panic = "abort"
+strip = "symbols"

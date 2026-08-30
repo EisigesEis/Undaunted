@@ -13,14 +13,14 @@ systemRouter.get("/dauntless-status", (req, res) => {
 
     res.json({
 	    "show-status": true,
-	    "en": "Welcome to Undaunted v0.0.5!",
-	    "fr": "Welcome to Undaunted v0.0.5!",
-	    "it": "Welcome to Undaunted v0.0.5!",
-	    "es": "Welcome to Undaunted v0.0.5!",
-	    "de": "Welcome to Undaunted v0.0.5!",
-	    "pt": "Welcome to Undaunted v0.0.5!",
-	    "ru": "Welcome to Undaunted v0.0.5!",
-	    "ja": "Welcome to Undaunted v0.0.5!"
+	    "en": "Welcome to Undaunted v0.0.6!",
+	    "fr": "Welcome to Undaunted v0.0.6!",
+	    "it": "Welcome to Undaunted v0.0.6!",
+	    "es": "Welcome to Undaunted v0.0.6!",
+	    "de": "Welcome to Undaunted v0.0.6!",
+	    "pt": "Welcome to Undaunted v0.0.6!",
+	    "ru": "Welcome to Undaunted v0.0.6!",
+	    "ja": "Welcome to Undaunted v0.0.6!"
     });
 });
 

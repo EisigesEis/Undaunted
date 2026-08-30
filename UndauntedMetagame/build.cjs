@@ -2,8 +2,7 @@ const path = require("path");
 const { build } = require("esbuild");
 
 build({
-  absWorkingDir: __dirname,
-  entryPoints: ["./src/server.ts"],
+  entryPoints: [path.join(__dirname, "src", "server.ts")],
   bundle: true,
   platform: "node",
   target: "es2022",
@@ -11,7 +10,7 @@ build({
   packages: "external",
   minify: true,
   legalComments: "none",
-  outfile: "./dist/server.js",
+  outfile: path.join(__dirname, "dist", "server.js"),
 }).catch((error) => {
   console.error(error);
   process.exit(1);

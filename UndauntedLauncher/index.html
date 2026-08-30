@@ -1,152 +1,141 @@
 <!doctype html>
-<html>
-
+<html lang="en">
   <head>
-    <meta charset="UTF-8"     
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
     />
     <title>Undaunted Launcher</title>
-
   </head>
   <body>
-    <link rel="stylesheet" href="src/index.css">
-    <script type="module" src="/src/renderer.ts"></script>
-    <section id="login" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
-      <div class="flex flex-col items-center justify-center px-6 py-8 mx-auto md:h-screen lg:py-0">
-          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
-              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
-                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
-                      Welcome back, Slayer
-                  </h1>
-                  <form class="space-y-4 md:space-y-6">
-                      <div>
-                          <label for="userapikey" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">User API Key</label>
-                          <input name="userapikey" id="userapikey" placeholder="UUK••••••••" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
-                      </div>
-                      <button id="loginbutton" class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Login</button>
-                      <p class="text-sm font-light text-gray-500 dark:text-gray-400">
-                          Have an old Undaunted install with a bat file? <a href="#" id="migratelegacyinstallbutton2" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Migrate Legacy Install</a>
-                      </p>
-                      <p id="registrationsclosed" class="text-sm font-light text-gray-500 dark:text-gray-400">
-                          Registrations are currently closed
-                      </p>
-                      <p id="registrationsinvitecode" class="text-sm font-light text-gray-500 dark:text-gray-400">
-                          Have an invite code? <a id="inviteregisteraccount" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Register with an Invite Code</a>
-                      </p>
-                      <p id="registrationsopen" class="text-sm font-light text-gray-500 dark:text-gray-400">
-                          Need an account? <a id="openregisteraccount" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Register a new account</a>
-                      </p>
-                  </form>
-              </div>
-          </div>
+    <div id="background-default" class="background-default" aria-hidden="true"></div>
+    <div id="background-blur" class="background-blur" aria-hidden="true" hidden></div>
+    <div id="background-image" class="background-image" aria-hidden="true" hidden></div>
+    <canvas id="background-canvas" class="background-canvas" width="1080" height="608" aria-hidden="true" hidden></canvas>
+    <video id="background-video" class="background-video" loop muted playsinline preload="auto" hidden></video>
+    <header class="titlebar" data-tauri-drag-region>
+      <span class="titlebar__title" data-tauri-drag-region>Undaunted Launcher</span>
+      <div class="titlebar__background-actions">
+        <button id="choose-background-button" type="button" class="titlebar__action">Background</button>
+        <button id="clear-background-button" type="button" class="titlebar__action" hidden>Default</button>
+        <button id="fit-background-button" type="button" class="titlebar__action" hidden>Fit: Off</button>
       </div>
-    </section>
-    <section id="register" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
-      <div class="flex flex-col items-center justify-center px-6 py-8 mx-auto md:h-screen lg:py-0">
-          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
-              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
-                  <button id="backtologin" class="text-body bg-grey-primary border border-default hover:bg-grey-secondary-soft focus:ring-4 focus:ring-grey-tertiary font-medium leading-5 rounded-base text-sm text-white px-4 py-2.5 focus:outline-none">Back To Login</button>
-                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
-                      The Shattered Isles Await...
-                  </h1>
-                  <div class="space-y-4 md:space-y-6">
-                      <div>
-                          <label for="username" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Username</label>
-                          <input name="username" id="username" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
-                      </div>
-                      <div id="invitecodepanel">
-                          <label for="invitecode" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Invite Code</label>
-                          <input name="invitecode" id="invitecode" placeholder="••••••••" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-600 focus:border-blue-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required="">
-                      </div>
-                      <button id="registersubmitbutton" class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Register</button>
-                      <p class="text-sm font-light text-gray-500 dark:text-gray-400">
-                          Have an old Undaunted install with a bat file? <a id="migratelegacyinstallbutton1" href="#" class="font-medium text-blue-600 hover:underline dark:text-blue-500">Migrate Legacy Install</a>
-                      </p>
-                  </div>
-              </div>
-          </div>
-      </div>
-    </section>
-    <section id="registercomplete" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
-      <div class="flex flex-col items-center justify-center px-6 py-10 mx-auto md:h-screen lg:py-0">
-          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
-              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
-                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
-                      Registration Complete
-                  </h1>
-                  <p id="registrationcompletetext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">Your User API Key is "UUK_ABC123". Please keep it safe, it will not be shown again.</p>
-                  <form class="space-y-4 md:space-y-6">
-                      <button id="registrationcompleteclosebutton" class="w-full text-white hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Close</button>
-                  </form>
-              </div>
-          </div>
-      </div>
-    </section>
-    <section id="install" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat">
-      <div class="flex flex-col items-center justify-center px-6 py-10 mx-auto md:h-screen lg:py-0">
-          <div class="w-full bg-white rounded-lg shadow dark:border md:mt-0 sm:max-w-md xl:p-0 dark:bg-gray-800 dark:border-gray-700">
-              <div class="p-6 space-y-4 md:space-y-6 sm:p-8">
-                  <h1 class="text-xl font-bold leading-tight tracking-tight text-gray-900 md:text-2xl dark:text-white">
-                      Install Undaunted
-                  </h1>
-                  <div id="selectinstallfolderpanel">
-                    <p id="registrationcompletetext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">This will require a 10GB download, and 25GB of free storage space.</p>
-                    <form class="space-y-4 md:space-y-6">
-                        <button id="selectinstallfolderbutton" class="w-full text-white hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Select Install Location</button>
-                    </form>
-                  </div>
-                  <div id="installundauntedprogressbar">
-                    <p id="installprogresstext" class="inline-block mb-4 text-sm text-gray-900 dark:text-white">Downloading Undaunted...</p>
-                    <div id="installprogress" class="w-full bg-neutral-quaternary rounded-full h-2">
-                      <div id="installprogressbar" class="bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
-                    </div>
-                  </div>
-              </div>
-          </div>
-      </div>
-    </section>
-    <section id="play" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat bg-dark bg-blend-multiply">
-      <div id="homepage" class="px-4 mx-auto max-w-screen-xl text-center py-24 lg:py-56">
-          <h1 id="homeusername" class="mb-6 text-4xl font-bold tracking-tighter text-white md:text-5xl lg:text-6xl">Welcome Back, gwog :3</h1>
-          <span id="versiontext" class="bg-brand-softer text-fg-brand-strong text-sm font-medium px-2 py-1 rounded">Undaunted v0.0.5</span>
-          <span id="playercounttext" class="bg-success-soft text-fg-success-strong text-sm font-medium px-2 py-1 rounded">0 Player(s) online</span>
-      </div>
-      <nav class="bg-gray-800 fixed w-full z-20 bottom-0 start-0 ">
-        <div class="max-w-screen-xl flex flex-wrap items-center justify-between mx-auto p-4">
-        <div class="inline-flex md:order-2 space-x-3 md:space-x-0 rtl:space-x-reverse">
-            <button id="playbutton" type="button" class="text-white bg-brand hover:bg-brand-strong box-border border border-transparent focus:ring-4 focus:ring-brand-medium shadow-xs font-medium leading-5 rounded-base text-sm px-3 py-2 focus:outline-none">Play Game</button>
-            <button id="exitbutton" type="button" class="text-danger border border-danger hover:bg-danger hover:text-white focus:ring-4 focus:ring-neutral-tertiary font-medium leading-5 rounded-base text-sm px-4 py-2.5 focus:outline-none">Exit Game</button>
+    </header>
+    <div class="window-controls" aria-label="Window controls">
+      <button id="minimize-window-button" type="button" class="window-control" aria-label="Minimize">—</button>
+      <button id="close-window-button" type="button" class="window-control window-control--close" aria-label="Close">×</button>
+    </div>
+
+    <main id="app" class="app-shell">
+      <section id="loading-view" class="view view--centered" aria-live="polite">
+        <div class="panel panel--loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <p id="loading-message">Connecting…</p>
+          <button id="retry-button" type="button" class="button button--primary" hidden>Retry</button>
+          <button id="edit-url-button" type="button" class="button button--secondary" hidden>Edit API URL</button>
         </div>
-        <div class="items-center justify-between hidden w-full md:flex md:w-auto md:order-1" id="navbar-cta">
-          <ul class="font-medium flex flex-col p-4 md:p-0 mt-4 border border-default rounded-base  md:flex-row md:space-x-8 rtl:space-x-reverse md:mt-0 md:border-0 ">
-            <div class="inline-flex rounded-base shadow-xs -space-x-px" role="group">
-              <button type="button" class="text-white bg-gray-800 border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-s-base text-sm px-3 py-2 focus:outline-none">
-                Home
-              </button>
-              <button id="logoutbutton" type="button" class="text-white bg-gray-800 border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-e-base text-sm px-3 py-2 focus:outline-none">
-                Logout
-              </button>
+      </section>
+
+      <section id="login-view" class="view view--sidebar" hidden>
+        <div class="sidebar">
+          <div class="sidebar__content">
+            <h1>Welcome back, Slayer</h1>
+            <form id="login-form" class="stack" novalidate>
+              <label for="api-url">API URL</label>
+              <input id="api-url" name="apiUrl" type="url" required placeholder="https://api.example.com" />
+              <label for="api-key">User API Key</label>
+              <input id="api-key" name="apiKey" type="password" autocomplete="off" placeholder="UUK••••••••" />
+              <p id="login-error" class="error" role="alert" hidden></p>
+              <button id="login-button" type="submit" class="button button--primary">Login</button>
+            </form>
+            <button id="migrate-login-button" type="button" class="text-button">Have an old Undaunted install with a bat file? Migrate Legacy Install</button>
+            <p id="registrations-closed" class="muted">Registrations are currently closed.</p>
+            <p id="registrations-invite" class="muted" hidden>Have an invite code? <button id="invite-register-button" type="button" class="link-button">Register with an Invite Code</button></p>
+            <p id="registrations-open" class="muted" hidden>Need an account? <button id="open-register-button" type="button" class="link-button">Register a new account</button></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="register-view" class="view view--sidebar" hidden>
+        <div class="sidebar">
+          <div class="sidebar__content">
+            <button id="back-to-login-button" type="button" class="button button--secondary button--small">Back To Login</button>
+            <h1>The Shattered Isles Await…</h1>
+            <form id="register-form" class="stack" novalidate>
+              <label for="username">Username</label>
+              <input id="username" name="username" autocomplete="username" />
+              <div id="invite-code-panel" class="stack stack--compact">
+                <label for="invite-code">Invite Code</label>
+                <input id="invite-code" name="inviteCode" placeholder="••••••••" />
+              </div>
+              <p id="register-error" class="error" role="alert" hidden></p>
+              <button id="register-button" type="submit" class="button button--primary">Register</button>
+            </form>
+            <button id="migrate-register-button" type="button" class="text-button">Have an old Undaunted install with a bat file? Migrate Legacy Install</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="registration-complete-view" class="view view--sidebar" hidden>
+        <div class="sidebar">
+          <div class="sidebar__content">
+            <h1>Registration Complete</h1>
+            <p id="registration-complete-text" class="copy"></p>
+            <button id="registration-complete-close-button" type="button" class="button button--primary">Close</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="install-view" class="view view--sidebar" hidden>
+        <div class="sidebar">
+          <div class="sidebar__content">
+            <h1>Install Undaunted</h1>
+            <div class="stack install-selection">
+              <p class="copy">Provide your own existing Dauntless 1.4.4 installation by selecting its game folder or the folder containing it.</p>
+              <p id="install-error" class="error" role="alert" hidden></p>
+              <button id="existing-install-button" type="button" class="button button--primary">Use Existing Installation</button>
             </div>
-            <!--
-            <div class="inline-flex rounded-base shadow-xs -space-x-px" role="group">
-              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-s-base text-sm px-3 py-2 focus:outline-none">
-                Status
-              </button>
-              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 text-sm px-3 py-2 focus:outline-none">
-                Players
-              </button>
-              <button type="button" class="text-white border border-default hover:bg-neutral-secondary-medium hover:text-heading focus:ring-neutral-tertiary-soft font-medium leading-5 rounded-e-base text-sm px-3 py-2 focus:outline-none">
-                Registration
-              </button>
-            </div>
-            -->
-          </ul>
+          </div>
         </div>
+      </section>
+
+      <section id="play-view" class="view view--play" hidden>
+        <div class="play-header">
+          <div class="play-identity">
+            <span id="home-username" class="play-identity__welcome">Welcome Back, Slayer</span>
+            <h1>Enter the Shattered Isles</h1>
+            <p id="play-error" class="error error--overlay" role="alert" hidden></p>
+          </div>
         </div>
-      </nav>
-    </section>
-    <section id="loading" class="h-screen overflow-hidden bg-[url('/assets/background.png')] bg-cover bg-central bg-no-repeat bg-dark bg-blend-multiply">
-    </section>
+        <nav class="bottom-nav" aria-label="Launcher controls">
+          <div class="bottom-nav__actions bottom-nav__actions--left"><button id="logout-button" type="button" class="button button--secondary">Logout</button><button id="admin-button" type="button" class="button button--secondary" hidden>Admin</button></div>
+          <div class="bottom-nav__status" aria-label="Server status"><span id="version-text" class="badge">Undaunted</span><span id="player-count-text" class="badge badge--success">0 Players Online</span></div>
+          <div class="bottom-nav__actions bottom-nav__actions--right">
+            <button id="play-button" type="button" class="button button--play">Play Game</button>
+            <button id="stop-button" type="button" class="button button--danger" hidden>Exit Game</button>
+          </div>
+        </nav>
+      </section>
+
+      <section id="admin-view" class="view view--centered" hidden>
+        <div class="panel panel--wide">
+          <div class="panel-heading"><h1>Admin</h1><button id="back-to-play-button" type="button" class="button button--secondary button--small">Back</button></div>
+          <p id="admin-error" class="error" role="alert" hidden></p>
+          <form id="registration-mode-form" class="stack stack--compact">
+            <label for="registration-mode">Registration</label>
+            <div class="inline-controls"><select id="registration-mode" name="registrationMode"><option value="NONE">Disabled</option><option value="INVITECODE">Invite Code Required</option><option value="OPEN">Open</option></select><button id="save-registration-mode" type="submit" class="button button--primary">Save</button></div>
+          </form>
+          <form id="invite-code-form" class="stack stack--compact admin-section">
+            <label for="new-invite-code">New Invite Code</label>
+            <input id="new-invite-code" name="inviteCode" autocomplete="off" />
+            <div class="inline-controls"><input id="new-invite-uses" name="uses" type="number" min="1" value="1" /><label class="checkbox-label" for="new-invite-infinite"><input id="new-invite-infinite" name="infinite" type="checkbox" /> Infinite uses</label><button id="add-invite-code" type="submit" class="button button--primary">Add</button></div>
+          </form>
+          <div class="admin-section"><h2>Invite Codes</h2><div id="invite-code-list" class="invite-list"></div><p id="invite-code-empty" class="muted" hidden>No invite codes.</p></div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

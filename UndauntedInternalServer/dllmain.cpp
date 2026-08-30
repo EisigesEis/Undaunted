@@ -1825,6 +1825,7 @@ void Init() {
 
             std::cout << "Welcome to Undaunted v" << UNDAUNTED_INTERNAL_VERSION << "!" << std::endl;
             std::cout << "prod. gwog :3" << std::endl;
+            std::cout << "reforgemaxxed by EisigesEis" << std::endl;
             std::cout << "thanks to all who contributed in any way, you know who you are, dm me on discord if you want a named shoutout here :3" << std::endl;
 
             std::cout << "Running as a server!" << std::endl;
@@ -1843,6 +1844,7 @@ void Init() {
 
             std::cout << "Welcome to Undaunted v" << UNDAUNTED_INTERNAL_VERSION << "!" << std::endl;
             std::cout << "prod. gwog :3" << std::endl;
+            std::cout << "reforgemaxxed by EisigesEis" << std::endl;
             std::cout << "thanks to all who contributed in any way, you know who you are, dm me on discord if you want a named shoutout here :3" << std::endl;
 
             std::cout << "Running as a debug-enabled client!" << std::endl;

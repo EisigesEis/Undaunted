@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Minimal permissions for the Undaunted launcher window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-center",
+    "core:window:allow-current-monitor",
+    "core:window:allow-destroy",
+    "core:window:allow-minimize",
+    "core:window:allow-set-size",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open",
+    "dialog:allow-message"
+  ]
+}

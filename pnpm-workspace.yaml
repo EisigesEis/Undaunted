@@ -1,6 +1,9 @@
 packages:
+  - "UndauntedLauncher"
   - "UndauntedMetagame"
   - "UndauntedDeployServer"
+verifyDepsBeforeRun: false
+nodeLinker: hoisted
 allowBuilds:
   better-sqlite3: true
   esbuild: true
