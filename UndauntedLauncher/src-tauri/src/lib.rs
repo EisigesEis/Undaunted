@@ -10,6 +10,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 let _ = webview.window().show();
@@ -39,7 +40,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_launcher_state,
-            commands::get_runtime_config,
+            commands::get_credential_bootstrap,
+            commands::get_credential_profile_key,
+            commands::delete_credential_profile,
+            commands::copy_user_api_key,
             commands::get_background,
             commands::set_background,
             commands::clear_background,

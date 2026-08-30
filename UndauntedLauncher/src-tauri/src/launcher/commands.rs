@@ -8,8 +8,8 @@ use crate::{
     game,
     launcher::{
         models::{
-            AdminState, BackgroundAsset, Dashboard, LauncherRoute, LauncherState, RegistrationMode,
-            RegistrationResult,
+            AdminState, BackgroundAsset, CredentialBootstrap, CredentialProfile, Dashboard,
+            LauncherRoute, LauncherState, RegistrationMode, RegistrationResult,
         },
         state::AppState,
     },
@@ -21,8 +21,71 @@ pub async fn get_launcher_state(state: State<'_, AppState>) -> Result<LauncherSt
 }
 
 #[tauri::command]
-pub fn get_runtime_config(state: State<'_, AppState>) -> Result<(String, bool), CommandError> {
-    Ok((state.api.base_url(), state.credentials.get()?.is_some()))
+pub fn get_credential_bootstrap(
+    state: State<'_, AppState>,
+) -> Result<CredentialBootstrap, CommandError> {
+    credential_bootstrap(&state)
+}
+
+#[tauri::command]
+pub fn get_credential_profile_key(
+    profile_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    if profile_id == crate::storage::credentials::LEGACY_ACCOUNT {
+        return state
+            .credentials
+            .get()?
+            .ok_or_else(CommandError::invalid_credentials);
+    }
+    let exists = state
+        .config
+        .credential_profiles()?
+        .iter()
+        .any(|profile| profile.id == profile_id);
+    if !exists {
+        return Err(CommandError::invalid_credentials());
+    }
+    state
+        .credentials
+        .get_account(&profile_id)?
+        .ok_or_else(CommandError::invalid_credentials)
+}
+
+#[tauri::command]
+pub fn delete_credential_profile(
+    profile_id: String,
+    state: State<'_, AppState>,
+) -> Result<CredentialBootstrap, CommandError> {
+    if profile_id == crate::storage::credentials::LEGACY_ACCOUNT {
+        state.credentials.delete()?;
+        state.config.set_active_credential_profile_id(None)?;
+        return credential_bootstrap(&state);
+    }
+    let mut profiles = state.config.credential_profiles()?;
+    if !profiles.iter().any(|profile| profile.id == profile_id) {
+        return credential_bootstrap(&state);
+    };
+    let profile_key = state.credentials.get_account(&profile_id)?;
+    let deleting_active = state.config.active_credential_profile_id()?.as_deref()
+        == Some(&profile_id)
+        || (profile_key.is_some() && profile_key.as_deref() == state.credentials.get()?.as_deref());
+    state.credentials.delete_account(&profile_id)?;
+    profiles.retain(|item| item.id != profile_id);
+    state.config.set_credential_profiles(profiles)?;
+    if deleting_active {
+        state.config.set_active_credential_profile_id(None)?;
+        state.credentials.delete()?;
+    }
+    credential_bootstrap(&state)
+}
+
+#[tauri::command]
+pub fn copy_user_api_key(api_key: String, app: tauri::AppHandle) -> Result<(), CommandError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard()
+        .write_text(api_key)
+        .map_err(|_| CommandError::internal("The UUK could not be copied to the clipboard."))
 }
 
 #[tauri::command]
@@ -31,11 +94,11 @@ pub fn get_background(state: State<'_, AppState>) -> Result<Option<BackgroundAss
 }
 
 #[tauri::command]
-pub fn set_background(
+pub async fn set_background(
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<BackgroundAsset, CommandError> {
-    state.set_background(PathBuf::from(file_path))
+    state.set_background(PathBuf::from(file_path)).await
 }
 
 #[tauri::command]
@@ -62,7 +125,7 @@ pub async fn login(
     let supplied_api_key = api_key.trim();
     let api_url = validated_api_url(&api_url)?;
     state.api.set_api_url(&api_url);
-    let saved_api_key = state.credentials.get()?;
+    let saved_api_key = active_api_key(&state)?;
     let api_key = if supplied_api_key.is_empty() {
         saved_api_key
             .as_deref()
@@ -70,22 +133,117 @@ pub async fn login(
     } else {
         supplied_api_key
     };
-    state.api.get_user_info(api_key).await?;
+    let user = state.api.get_user_info(api_key).await?;
     state.config.set_api_url(&api_url)?;
-    if !supplied_api_key.is_empty() {
-        state.credentials.set(api_key)?;
-    }
+    save_profile(&state, &api_url, &user, api_key)?;
     state_for_valid_user(&state).await
 }
 
 #[tauri::command]
-pub async fn logout(state: State<'_, AppState>) -> Result<LauncherState, CommandError> {
-    state.credentials.delete()?;
-    let registration_mode = state.api.get_registration_mode().await?;
+pub fn logout() -> Result<LauncherState, CommandError> {
     Ok(LauncherState {
         route: LauncherRoute::Login,
-        registration_mode: Some(registration_mode),
+        registration_mode: None,
     })
+}
+
+fn credential_bootstrap(state: &AppState) -> Result<CredentialBootstrap, CommandError> {
+    let mut profiles = state.config.credential_profiles()?;
+    let mut configured_active = state.config.active_credential_profile_id()?;
+    let profile_count_before_cleanup = profiles.len();
+    profiles.retain(|profile| {
+        state
+            .credentials
+            .get_account(&profile.id)
+            .ok()
+            .flatten()
+            .is_some()
+    });
+    if profiles.len() != profile_count_before_cleanup {
+        state.config.set_credential_profiles(profiles.clone())?;
+    }
+    if configured_active
+        .as_ref()
+        .is_some_and(|id| !profiles.iter().any(|profile| &profile.id == id))
+    {
+        configured_active = None;
+        state.config.set_active_credential_profile_id(None)?;
+    }
+    if configured_active.is_none()
+        && let Some(legacy_key) = state.credentials.get()?
+    {
+        let api_url = state.api.base_url();
+        let legacy_id = profile_id(&api_url, "legacy");
+        state.credentials.set_account(&legacy_id, &legacy_key)?;
+        profiles.retain(|profile| profile.id != legacy_id);
+        profiles.push(CredentialProfile {
+            id: legacy_id.clone(),
+            api_url,
+            user_id: String::new(),
+            username: "Saved account".to_owned(),
+        });
+        state.config.set_credential_profiles(profiles.clone())?;
+        state
+            .config
+            .set_active_credential_profile_id(Some(legacy_id.clone()))?;
+        state.credentials.delete()?;
+        configured_active = Some(legacy_id);
+    }
+    let active_profile_id = configured_active.filter(|id| {
+        profiles.iter().any(|profile| &profile.id == id)
+            && state.credentials.get_account(id).ok().flatten().is_some()
+    });
+
+    Ok(CredentialBootstrap {
+        api_url: state.api.base_url(),
+        profiles,
+        active_profile_id,
+    })
+}
+
+fn save_profile(
+    state: &AppState,
+    api_url: &str,
+    user: &crate::api::UserInfo,
+    key: &str,
+) -> Result<(), CommandError> {
+    let id = profile_id(api_url, &user.user_id);
+    state.credentials.set_account(&id, key)?;
+    let mut profiles = state.config.credential_profiles()?;
+    let mut replaced_accounts = Vec::new();
+    for profile in &profiles {
+        if profile.id == id {
+            continue;
+        }
+        let same_identity = profile.api_url == api_url && profile.user_id == user.user_id;
+        let same_saved_key = profile.api_url == api_url
+            && state.credentials.get_account(&profile.id)?.as_deref() == Some(key);
+        if same_identity || same_saved_key {
+            replaced_accounts.push(profile.id.clone());
+        }
+    }
+    profiles.retain(|profile| {
+        profile.id != id
+            && !replaced_accounts
+                .iter()
+                .any(|account| account == &profile.id)
+    });
+    profiles.push(CredentialProfile {
+        id: id.clone(),
+        api_url: api_url.to_owned(),
+        user_id: user.user_id.clone(),
+        username: user.username.clone(),
+    });
+    state.config.set_credential_profiles(profiles)?;
+    state.config.set_active_credential_profile_id(Some(id))?;
+    for account in replaced_accounts {
+        let _ = state.credentials.delete_account(&account);
+    }
+    Ok(())
+}
+
+fn profile_id(api_url: &str, user_id: &str) -> String {
+    format!("api={api_url}; user={user_id}")
 }
 
 #[tauri::command]
@@ -119,7 +277,8 @@ pub async fn register_account(
 
     let api_key = state.api.register(username, invite_code).await?;
     state.config.set_api_url(&api_url)?;
-    state.credentials.set(&api_key)?;
+    let user = state.api.get_user_info(&api_key).await?;
+    save_profile(&state, &api_url, &user, &api_key)?;
     let next_route = state_for_valid_user(&state).await?.route;
     Ok(RegistrationResult {
         api_key,
@@ -140,10 +299,10 @@ pub async fn migrate_legacy_install(
             "The legacy installation is not the supported Dauntless 1.4.4 build.",
         ));
     }
-    state.api.get_user_info(&api_key).await?;
     game::patch_install(&state.resources, &win64_path)?;
     state.config.set_game_path(win64_path)?;
-    state.credentials.set(&api_key)?;
+    let user = state.api.get_user_info(&api_key).await?;
+    save_profile(&state, &state.api.base_url(), &user, &api_key)?;
     state_for_valid_user(&state).await
 }
 
@@ -299,17 +458,21 @@ pub fn is_game_running(state: State<'_, AppState>) -> Result<bool, CommandError>
 }
 
 async fn launcher_state(state: &AppState) -> Result<LauncherState, CommandError> {
-    let Some(api_key) = state.credentials.get()? else {
+    let Some(api_key) = active_api_key(state)? else {
         return Ok(LauncherState {
             route: LauncherRoute::Login,
-            registration_mode: Some(state.api.get_registration_mode().await?),
+            registration_mode: None,
         });
     };
     match state.api.get_user_info(&api_key).await {
-        Ok(_) => state_for_valid_user(state).await,
+        Ok(user) => {
+            let api_url = state.api.base_url();
+            save_profile(state, &api_url, &user, &api_key)?;
+            state_for_valid_user(state).await
+        }
         Err(error) if error.code == "invalid_credentials" => Ok(LauncherState {
             route: LauncherRoute::Login,
-            registration_mode: Some(state.api.get_registration_mode().await?),
+            registration_mode: None,
         }),
         Err(error) => Err(error),
     }
@@ -355,10 +518,16 @@ async fn admin_key(state: &AppState) -> Result<String, CommandError> {
 }
 
 fn api_key(state: &AppState) -> Result<String, CommandError> {
-    state
-        .credentials
-        .get()?
-        .ok_or_else(CommandError::invalid_credentials)
+    active_api_key(state)?.ok_or_else(CommandError::invalid_credentials)
+}
+
+fn active_api_key(state: &AppState) -> Result<Option<String>, CommandError> {
+    if let Some(profile_id) = state.config.active_credential_profile_id()?
+        && let Some(key) = state.credentials.get_account(&profile_id)?
+    {
+        return Ok(Some(key));
+    }
+    state.credentials.get()
 }
 
 fn validated_api_url(value: &str) -> Result<String, CommandError> {

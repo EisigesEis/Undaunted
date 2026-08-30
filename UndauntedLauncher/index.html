@@ -14,7 +14,7 @@
     <div id="background-blur" class="background-blur" aria-hidden="true" hidden></div>
     <div id="background-image" class="background-image" aria-hidden="true" hidden></div>
     <canvas id="background-canvas" class="background-canvas" width="1080" height="608" aria-hidden="true" hidden></canvas>
-    <video id="background-video" class="background-video" loop muted playsinline preload="auto" hidden></video>
+    <video id="background-video" class="background-video" loop muted playsinline preload="metadata" hidden></video>
     <header class="titlebar" data-tauri-drag-region>
       <span class="titlebar__title" data-tauri-drag-region>Undaunted Launcher</span>
       <div class="titlebar__background-actions">
@@ -42,11 +42,13 @@
         <div class="sidebar">
           <div class="sidebar__content">
             <h1>Welcome back, Slayer</h1>
+            <div id="credential-profiles" class="credential-profiles" hidden><label>Saved Accounts</label><div id="credential-profile-list" class="credential-list"></div></div>
             <form id="login-form" class="stack" novalidate>
               <label for="api-url">API URL</label>
               <input id="api-url" name="apiUrl" type="url" required placeholder="https://api.example.com" />
               <label for="api-key">User API Key</label>
-              <input id="api-key" name="apiKey" type="password" autocomplete="off" placeholder="UUK••••••••" />
+              <input id="api-key" name="apiKey" type="password" autocomplete="off" placeholder="Enter your UUK" />
+              <div class="key-actions"><button id="login-key-reveal-button" type="button" class="button button--secondary">Show</button><button id="login-key-copy-button" type="button" class="button button--secondary">Copy</button></div>
               <p id="login-error" class="error" role="alert" hidden></p>
               <button id="login-button" type="submit" class="button button--primary">Login</button>
             </form>

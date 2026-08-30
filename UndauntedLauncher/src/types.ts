@@ -11,6 +11,19 @@ export interface RegistrationResult {
   nextRoute: LauncherRoute;
 }
 
+export interface CredentialProfile {
+  id: string;
+  apiUrl: string;
+  userId: string;
+  username: string;
+}
+
+export interface CredentialBootstrap {
+  apiUrl: string;
+  profiles: CredentialProfile[];
+  activeProfileId: string | null;
+}
+
 export interface Dashboard {
   username: string;
   version: string;

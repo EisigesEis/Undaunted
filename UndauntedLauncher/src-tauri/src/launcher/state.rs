@@ -16,6 +16,7 @@ use crate::{
 };
 
 pub struct AppState {
+    app: AppHandle,
     pub api: ApiClient,
     pub config: ConfigStore,
     pub credentials: Credentials,
@@ -44,6 +45,7 @@ impl AppState {
         let trials_player_hunts = resolve_resource(app, "game-patch/TrialsPlayerHunts_P.pak")?;
 
         Ok(Self {
+            app: app.clone(),
             api: ApiClient::from_runtime(config.api_url()?)?,
             config,
             credentials,
@@ -63,6 +65,17 @@ impl AppState {
     }
 
     pub fn background(&self) -> Result<Option<BackgroundAsset>, CommandError> {
+        if let Some(path) = self.config.external_background_video_path()? {
+            if !path.is_file() || background_media_type(&path).ok() != Some("video") {
+                self.config.clear_background()?;
+                return Ok(None);
+            }
+            self.allow_external_background(&path)?;
+            return Ok(Some(BackgroundAsset {
+                path: path.to_string_lossy().into_owned(),
+                media_type: "video".to_owned(),
+            }));
+        }
         let Some(file_name) = self.config.background_file_name()? else {
             return Ok(None);
         };
@@ -81,7 +94,7 @@ impl AppState {
         }))
     }
 
-    pub fn set_background(&self, source: PathBuf) -> Result<BackgroundAsset, CommandError> {
+    pub async fn set_background(&self, source: PathBuf) -> Result<BackgroundAsset, CommandError> {
         if !source.is_file() {
             return Err(CommandError::new(
                 "invalid_background",
@@ -107,6 +120,24 @@ impl AppState {
                 false,
             )
         })?;
+        if media_type == "video" {
+            let path = source.canonicalize().map_err(|_| {
+                CommandError::new(
+                    "invalid_background",
+                    "The selected video path could not be resolved.",
+                    false,
+                )
+            })?;
+            self.allow_external_background(&path)?;
+            let previous = self.config.background_file_name()?;
+            self.config
+                .set_external_background_video_path(Some(path.clone()))?;
+            self.remove_managed_background(previous);
+            return Ok(BackgroundAsset {
+                path: path.to_string_lossy().into_owned(),
+                media_type: "video".to_owned(),
+            });
+        }
         fs::create_dir_all(&self.background_dir).map_err(|_| {
             CommandError::internal("The launcher background folder could not be created.")
         })?;
@@ -115,7 +146,21 @@ impl AppState {
         let temporary = self
             .background_dir
             .join(format!("background.{}.tmp", std::process::id()));
-        if let Err(_) = fs::copy(&source, &temporary) {
+        let backup = self
+            .background_dir
+            .join(format!("background.{}.previous", std::process::id()));
+        let copy_source = source.clone();
+        let copy_temporary = temporary.clone();
+        let copied = tokio::task::spawn_blocking(move || fs::copy(copy_source, copy_temporary))
+            .await
+            .map_err(|_| {
+                CommandError::new(
+                    "background_copy_failed",
+                    "The background copy task could not be completed.",
+                    true,
+                )
+            })?;
+        if copied.is_err() {
             let _ = fs::remove_file(&temporary);
             return Err(CommandError::new(
                 "background_copy_failed",
@@ -123,8 +168,13 @@ impl AppState {
                 true,
             ));
         }
-        if destination.exists() {
-            fs::remove_file(&destination).map_err(|_| {
+        let previous = self.config.background_file_name()?;
+        let replacing_destination = destination.is_file();
+        if backup.is_file() {
+            let _ = fs::remove_file(&backup);
+        }
+        if replacing_destination {
+            fs::rename(&destination, &backup).map_err(|_| {
                 CommandError::new(
                     "background_copy_failed",
                     "The previous background could not be replaced.",
@@ -132,21 +182,30 @@ impl AppState {
                 )
             })?;
         }
-        if let Some(previous) = self.config.background_file_name()? {
-            let previous_path = self.background_dir.join(previous);
-            if previous_path != destination && previous_path.is_file() {
-                let _ = fs::remove_file(previous_path);
-            }
-        }
-        fs::rename(&temporary, &destination).map_err(|_| {
+        if fs::rename(&temporary, &destination).is_err() {
             let _ = fs::remove_file(&temporary);
-            CommandError::new(
+            if replacing_destination {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(CommandError::new(
                 "background_copy_failed",
                 "The selected background could not be saved.",
                 true,
-            )
-        })?;
-        self.config.set_background_file_name(Some(file_name))?;
+            ));
+        }
+        if let Err(error) = self.config.set_background_file_name(Some(file_name)) {
+            let _ = fs::remove_file(&destination);
+            if replacing_destination {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(error);
+        }
+        if backup.is_file() {
+            let _ = fs::remove_file(&backup);
+        }
+        self.remove_managed_background(
+            previous.filter(|name| self.background_dir.join(name) != destination),
+        );
         Ok(BackgroundAsset {
             path: destination.to_string_lossy().into_owned(),
             media_type: media_type.to_owned(),
@@ -154,13 +213,34 @@ impl AppState {
     }
 
     pub fn clear_background(&self) -> Result<(), CommandError> {
-        if let Some(previous) = self.config.background_file_name()? {
-            let path = self.background_dir.join(previous);
-            if path.is_file() {
-                let _ = fs::remove_file(path);
-            }
+        let previous = self.config.background_file_name()?;
+        self.config.clear_background()?;
+        self.remove_managed_background(previous);
+        Ok(())
+    }
+
+    fn allow_external_background(&self, path: &Path) -> Result<(), CommandError> {
+        self.app
+            .asset_protocol_scope()
+            .allow_file(path)
+            .map_err(|_| {
+                CommandError::new(
+                    "background_access_failed",
+                    "The launcher could not access the selected video.",
+                    true,
+                )
+            })
+    }
+
+    fn remove_managed_background(&self, file_name: Option<String>) {
+        let Some(file_name) = file_name else { return };
+        if Path::new(&file_name).file_name() != Some(std::ffi::OsStr::new(&file_name)) {
+            return;
         }
-        self.config.set_background_file_name(None)
+        let path = self.background_dir.join(file_name);
+        if path.is_file() {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 

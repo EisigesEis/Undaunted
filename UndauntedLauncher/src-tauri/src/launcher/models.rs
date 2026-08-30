@@ -40,6 +40,23 @@ pub struct LauncherState {
     pub registration_mode: Option<RegistrationMode>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialProfile {
+    pub id: String,
+    pub api_url: String,
+    pub user_id: String,
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialBootstrap {
+    pub api_url: String,
+    pub profiles: Vec<CredentialProfile>,
+    pub active_profile_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationResult {

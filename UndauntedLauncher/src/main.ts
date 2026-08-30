@@ -9,6 +9,8 @@ import {
   type AdminState,
   type BackgroundAsset,
   type CommandError,
+  type CredentialBootstrap,
+  type CredentialProfile,
   type Dashboard,
   type LauncherRoute,
   type LauncherState,
@@ -68,10 +70,15 @@ let videoFrameCallback: number | undefined;
 let fitBackground = localStorage.getItem(FIT_BACKGROUND_STORAGE_KEY) !== "false";
 let blurredSidelines = false;
 let activeMediaSize: { width: number; height: number } | null = null;
+let selectedProfileId: string | null = null;
+let startupCheckPending = true;
 
 const api = {
   state: () => invoke<LauncherState>("get_launcher_state"),
-  config: () => invoke<[string, boolean]>("get_runtime_config"),
+  credentialBootstrap: () => invoke<CredentialBootstrap>("get_credential_bootstrap"),
+  credentialProfileKey: (profileId: string) => invoke<string>("get_credential_profile_key", { profileId }),
+  deleteCredentialProfile: (profileId: string) => invoke<CredentialBootstrap>("delete_credential_profile", { profileId }),
+  copyKey: (apiKey: string) => invoke<void>("copy_user_api_key", { apiKey }),
   background: () => invoke<BackgroundAsset | null>("get_background"),
   setBackground: (filePath: string) => invoke<BackgroundAsset>("set_background", { filePath }),
   clearBackground: () => invoke<void>("clear_background"),
@@ -101,8 +108,9 @@ const api = {
 
 function show(name: keyof typeof views): void {
   stopPolling();
+  const visibleView = startupCheckPending && name !== "loading" ? "loading" : name;
   Object.entries(views).forEach(([key, node]) => {
-    node.hidden = key !== name;
+    node.hidden = key !== visibleView;
   });
 }
 
@@ -319,7 +327,7 @@ async function startBackgroundVideo(source: string): Promise<void> {
       .catch(() => undefined);
   };
 
-  backgroundVideo.preload = "auto";
+  backgroundVideo.preload = "metadata";
   backgroundVideo.hidden = false;
   backgroundVideo.onloadedmetadata = play;
   backgroundVideo.onloadeddata = play;
@@ -378,17 +386,28 @@ async function initializeBackground(): Promise<void> {
 }
 
 async function loadState(): Promise<void> {
+  startupCheckPending = true;
   show("loading");
   retryButton.hidden = true;
-  loadingMessage.textContent = "Connecting…";
+  loadingMessage.textContent = "Loading saved accounts…";
   try {
-    const [apiUrl, hasSavedApiKey] = await api.config();
-    apiUrlInput.value = apiUrl;
-    get<HTMLInputElement>("api-key").placeholder = hasSavedApiKey
-      ? "Saved API key will be used"
-      : "UUK••••••••";
-    await applyState(await api.state());
+    await applyCredentialBootstrap(await api.credentialBootstrap());
+    try {
+      const state = await api.state();
+      await applyState(state);
+      startupCheckPending = false;
+      show(state.route);
+      if (state.route === "login") {
+        void refreshRegistrationMode(false);
+      }
+    } catch (error) {
+      startupCheckPending = false;
+      show("login");
+      setError(loginError, error);
+      void refreshRegistrationMode(false);
+    }
   } catch (error) {
+    startupCheckPending = false;
     const failure = asError(error);
     show("login");
     setError(loginError, failure);
@@ -401,8 +420,99 @@ async function choose(title: string): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+async function applyCredentialBootstrap(bootstrap: CredentialBootstrap): Promise<void> {
+  apiUrlInput.value = bootstrap.apiUrl;
+  const keyInput = get<HTMLInputElement>("api-key");
+  keyInput.type = "password";
+  get<HTMLButtonElement>("login-key-reveal-button").textContent = "Show";
+  await renderCredentialProfiles(bootstrap.profiles, bootstrap.activeProfileId);
+  if (bootstrap.activeProfileId) {
+    const active = bootstrap.profiles.find((profile) => profile.id === bootstrap.activeProfileId);
+    if (active) await selectCredentialProfile(active);
+  }
+}
+
+async function renderCredentialProfiles(profiles: CredentialProfile[], activeProfileId: string | null): Promise<void> {
+  const panel = get("credential-profiles");
+  const list = get("credential-profile-list");
+  list.replaceChildren();
+  panel.hidden = profiles.length === 0;
+  selectedProfileId = activeProfileId;
+  const groups = new Map<string, CredentialProfile[]>();
+  for (const profile of profiles) groups.set(profile.apiUrl, [...(groups.get(profile.apiUrl) ?? []), profile]);
+  for (const [apiUrl, group] of groups) {
+    const heading = document.createElement("div");
+    heading.className = "credential-group__url";
+    heading.textContent = apiUrl;
+    list.append(heading);
+    for (const profile of group) {
+      const row = document.createElement("div");
+      row.className = "credential-card";
+      row.dataset.profileId = profile.id;
+      row.classList.toggle("credential-card--selected", profile.id === selectedProfileId);
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "credential-card__select";
+      const name = document.createElement("span");
+      name.className = "credential-card__name";
+      name.textContent = profile.username || "Saved account";
+      const detail = document.createElement("span");
+      detail.className = "credential-card__detail";
+      detail.textContent = profile.userId || "Legacy launcher credential";
+      select.append(name, detail);
+      select.addEventListener("click", () => void selectCredentialProfile(profile));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "credential-card__delete";
+      remove.textContent = "🗑";
+      remove.title = `Delete ${profile.username || "saved account"}`;
+      remove.setAttribute("aria-label", remove.title);
+      remove.addEventListener("click", () => void deleteCredentialProfile(profile));
+      row.append(select, remove);
+      list.append(row);
+    }
+  }
+}
+
+async function selectCredentialProfile(profile: CredentialProfile): Promise<void> {
+  try {
+    const input = get<HTMLInputElement>("api-key");
+    input.value = await api.credentialProfileKey(profile.id);
+    input.type = "password";
+    get<HTMLButtonElement>("login-key-reveal-button").textContent = "Show";
+    selectedProfileId = profile.id;
+    apiUrlInput.value = profile.apiUrl;
+    document.querySelectorAll<HTMLElement>(".credential-card").forEach((card) => {
+      card.classList.toggle("credential-card--selected", card.dataset.profileId === profile.id);
+    });
+    setError(loginError);
+  } catch (error) { setError(loginError, error); }
+}
+
+async function deleteCredentialProfile(profile: CredentialProfile): Promise<void> {
+  const choice = await message(`Delete the saved account “${profile.username || profile.userId}” for ${profile.apiUrl}?`, {
+    title: "Delete Saved Account", kind: "warning", buttons: { ok: "Delete", cancel: "Cancel" },
+  });
+  if (choice !== "Delete") return;
+  try {
+    const selectedBeforeDelete = selectedProfileId;
+    const wasSelected = selectedBeforeDelete === profile.id;
+    const bootstrap = await api.deleteCredentialProfile(profile.id);
+    const retainedSelection = !wasSelected && bootstrap.profiles.some((item) => item.id === selectedBeforeDelete)
+      ? selectedBeforeDelete
+      : bootstrap.activeProfileId;
+    await renderCredentialProfiles(bootstrap.profiles, retainedSelection);
+    if (wasSelected) {
+      selectedProfileId = null;
+      get<HTMLInputElement>("api-key").value = "";
+    }
+  } catch (error) { setError(loginError, error); }
+}
+
 async function chooseBackground(): Promise<void> {
   chooseBackgroundButton.disabled = true;
+  const previousLabel = chooseBackgroundButton.textContent;
+  chooseBackgroundButton.textContent = "Applying…";
   try {
     const selected = await open({
       title: "Choose your launcher background",
@@ -416,6 +526,7 @@ async function chooseBackground(): Promise<void> {
     await message(asError(error).message, { title: "Background", kind: "error" });
   } finally {
     chooseBackgroundButton.disabled = false;
+    chooseBackgroundButton.textContent = previousLabel;
   }
 }
 
@@ -446,13 +557,13 @@ async function toggleBackgroundFit(): Promise<void> {
   }
 }
 
-async function refreshRegistrationMode(): Promise<void> {
-  setError(loginError);
+async function refreshRegistrationMode(reportError = true): Promise<void> {
+  if (reportError) setError(loginError);
   try {
     setRegistrationMode(await api.registrationMode(apiUrlInput.value.trim()));
   } catch (error) {
     setRegistrationMode(null);
-    setError(loginError, error);
+    if (reportError) setError(loginError, error);
   }
 }
 
@@ -600,7 +711,7 @@ get<HTMLFormElement>("register-form").addEventListener("submit", async (event) =
     const result = await api.register(username, invite || null, apiUrlInput.value.trim());
     nextRoute = result.nextRoute;
     get("registration-complete-text").textContent =
-      `Your User API Key is "${result.apiKey}". Keep it safe; it will not be shown again.`;
+      `Your User API Key is "${result.apiKey}". It is also saved in this launcher and can be recovered from the login screen.`;
     show("complete");
   } catch (error) {
     setError(registerError, error);
@@ -656,6 +767,14 @@ get("back-to-login-button").addEventListener("click", () => show("login"));
 get("migrate-login-button").addEventListener("click", () => void migrate());
 get("migrate-register-button").addEventListener("click", () => void migrate());
 get("existing-install-button").addEventListener("click", () => void useExistingInstall());
+const clearCredentialSelection = (): void => {
+  selectedProfileId = null;
+  document.querySelectorAll<HTMLElement>(".credential-card--selected").forEach((card) => {
+    card.classList.remove("credential-card--selected");
+  });
+};
+apiUrlInput.addEventListener("input", clearCredentialSelection);
+get<HTMLInputElement>("api-key").addEventListener("input", clearCredentialSelection);
 apiUrlInput.addEventListener("change", () => void refreshRegistrationMode());
 editUrlButton.addEventListener("click", () => {
   editUrlButton.hidden = true;
@@ -711,6 +830,9 @@ stopButton.addEventListener("click", async () => {
 get<HTMLButtonElement>("logout-button").addEventListener("click", async () => {
   try {
     await applyState(await api.logout());
+    await applyCredentialBootstrap(await api.credentialBootstrap());
+    show("login");
+    void refreshRegistrationMode(false);
   } catch (error) {
     show("loading");
     const failure = asError(error);
@@ -718,6 +840,22 @@ get<HTMLButtonElement>("logout-button").addEventListener("click", async () => {
     retryButton.hidden = !failure.retryable;
   }
 });
+
+async function copyKey(input: HTMLInputElement): Promise<void> {
+  try {
+    if (!input.value) throw new Error("Select a saved account or enter a UUK first.");
+    await api.copyKey(input.value);
+    input.focus();
+  } catch (error) {
+    setError(loginError, error);
+  }
+}
+get<HTMLButtonElement>("login-key-reveal-button").addEventListener("click", () => {
+  const input = get<HTMLInputElement>("api-key");
+  input.type = input.type === "password" ? "text" : "password";
+  get<HTMLButtonElement>("login-key-reveal-button").textContent = input.type === "password" ? "Show" : "Hide";
+});
+get<HTMLButtonElement>("login-key-copy-button").addEventListener("click", () => void copyKey(get<HTMLInputElement>("api-key")));
 
 window.addEventListener("beforeunload", stopPolling);
 

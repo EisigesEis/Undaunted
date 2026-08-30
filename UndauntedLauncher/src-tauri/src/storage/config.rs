@@ -6,6 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::launcher::models::CredentialProfile;
 use crate::{error::CommandError, storage::credentials::Credentials};
 
 #[derive(Default, Serialize, Deserialize)]
@@ -16,7 +17,10 @@ struct LauncherConfig {
     dauntless_win64_path: Option<PathBuf>,
     api_url: Option<String>,
     background_file_name: Option<String>,
+    external_background_video_path: Option<PathBuf>,
     legacy_import_completed: bool,
+    credential_profiles: Vec<CredentialProfile>,
+    active_credential_profile_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +63,32 @@ impl ConfigStore {
         self.write(&config)
     }
 
+    pub fn credential_profiles(&self) -> Result<Vec<CredentialProfile>, CommandError> {
+        Ok(self.read()?.credential_profiles)
+    }
+
+    pub fn set_credential_profiles(
+        &self,
+        profiles: Vec<CredentialProfile>,
+    ) -> Result<(), CommandError> {
+        let mut config = self.read()?;
+        config.credential_profiles = profiles;
+        self.write(&config)
+    }
+
+    pub fn active_credential_profile_id(&self) -> Result<Option<String>, CommandError> {
+        Ok(self.read()?.active_credential_profile_id)
+    }
+
+    pub fn set_active_credential_profile_id(
+        &self,
+        profile_id: Option<String>,
+    ) -> Result<(), CommandError> {
+        let mut config = self.read()?;
+        config.active_credential_profile_id = profile_id;
+        self.write(&config)
+    }
+
     pub fn background_file_name(&self) -> Result<Option<String>, CommandError> {
         Ok(self.read()?.background_file_name)
     }
@@ -66,6 +96,28 @@ impl ConfigStore {
     pub fn set_background_file_name(&self, value: Option<String>) -> Result<(), CommandError> {
         let mut config = self.read()?;
         config.background_file_name = value;
+        config.external_background_video_path = None;
+        self.write(&config)
+    }
+
+    pub fn external_background_video_path(&self) -> Result<Option<PathBuf>, CommandError> {
+        Ok(self.read()?.external_background_video_path)
+    }
+
+    pub fn set_external_background_video_path(
+        &self,
+        value: Option<PathBuf>,
+    ) -> Result<(), CommandError> {
+        let mut config = self.read()?;
+        config.external_background_video_path = value;
+        config.background_file_name = None;
+        self.write(&config)
+    }
+
+    pub fn clear_background(&self) -> Result<(), CommandError> {
+        let mut config = self.read()?;
+        config.background_file_name = None;
+        config.external_background_video_path = None;
         self.write(&config)
     }
 
