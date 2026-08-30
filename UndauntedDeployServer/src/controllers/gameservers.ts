@@ -311,6 +311,7 @@ const GAMESERVER_DLL_PATH = join(dirname(GAMESERVER_BINARY_PATH), "UndauntedInte
 const STANDARD_GAMESERVER_ARGS = ["-EpicPortal", "-server", "-nullrhi"];
 const METAGAME_API_KEY = process.env.METAGAME_API_KEY!;
 const MY_IP = process.env.MY_IP!;
+const METAGAME_ADDRESS = process.env.METAGAME_ADDRESS || MY_IP;
 const DEPLOYSERVER_PORT = process.env.PORT!;
 const GAMESERVER_READY_CALLBACK_URL = process.env.GAMESERVER_READY_CALLBACK_URL || `http://127.0.0.1:${DEPLOYSERVER_PORT}/api/gameservers/ready`;
 const GAMESERVER_LIFECYCLE_CALLBACK_URL = `http://127.0.0.1:${DEPLOYSERVER_PORT}/api/gameservers/heartbeat`;
@@ -1165,6 +1166,7 @@ async function StartServer(Options: StartServerOptions){
         Id,
         GAMESERVER_READY_CALLBACK_URL,
         ReadyCallbackToken,
+        `-undauntedMetagameAddress=${METAGAME_ADDRESS}`,
         `-undauntedConsoleLog=${GAMESERVER_CONSOLE_LOG}`,
         `-undauntedAssetStrippingMode=${GAMESERVER_ASSET_STRIPPING_MODE}`,
         `-undauntedStripInactiveMapPackages=${GAMESERVER_STRIP_INACTIVE_MAP_PACKAGES}`,

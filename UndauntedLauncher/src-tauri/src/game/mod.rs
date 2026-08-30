@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::{Child, Command},
 };
@@ -90,22 +90,16 @@ pub fn patch_install(resources: &PatchResources, win64_path: &Path) -> Result<()
         return Err(invalid_install_error());
     }
 
-    fs::copy(&resources.dxgi, win64_path.join("dxgi.dll")).map_err(|_| {
-        retry(
-            "patch_failed",
-            "dxgi.dll could not be copied into the game folder.",
-        )
-    })?;
-    fs::copy(
+    copy_if_different(
+        &resources.dxgi,
+        &win64_path.join("dxgi.dll"),
+        "dxgi.dll could not be copied into the game folder.",
+    )?;
+    copy_if_different(
         &resources.internal_server,
-        win64_path.join("UndauntedInternalServer.dll"),
-    )
-    .map_err(|_| {
-        retry(
-            "patch_failed",
-            "UndauntedInternalServer.dll could not be copied into the game folder.",
-        )
-    })?;
+        &win64_path.join("UndauntedInternalServer.dll"),
+        "UndauntedInternalServer.dll could not be copied into the game folder.",
+    )?;
 
     let content_paks = win64_path
         .parent()
@@ -120,17 +114,48 @@ pub fn patch_install(resources: &PatchResources, win64_path: &Path) -> Result<()
             "The game Content/Paks directory could not be created.",
         )
     })?;
-    fs::copy(
+    copy_if_different(
         &resources.trials_player_hunts,
-        content_paks.join("TrialsPlayerHunts_P.pak"),
-    )
-    .map_err(|_| {
-        retry(
-            "patch_failed",
-            "TrialsPlayerHunts_P.pak could not be copied into the game Content/Paks folder.",
-        )
-    })?;
+        &content_paks.join("TrialsPlayerHunts_P.pak"),
+        "TrialsPlayerHunts_P.pak could not be copied into the game Content/Paks folder.",
+    )?;
     Ok(())
+}
+
+fn copy_if_different(
+    source: &Path,
+    destination: &Path,
+    error_message: &str,
+) -> Result<(), CommandError> {
+    if destination.is_file() && files_have_same_contents(source, destination).unwrap_or(false) {
+        return Ok(());
+    }
+
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|_| retry("patch_failed", error_message))
+}
+
+fn files_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
+    if fs::metadata(left)?.len() != fs::metadata(right)?.len() {
+        return Ok(false);
+    }
+
+    let mut left = fs::File::open(left)?;
+    let mut right = fs::File::open(right)?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let left_count = left.read(&mut left_buffer)?;
+        let right_count = right.read(&mut right_buffer)?;
+        if left_count != right_count || left_buffer[..left_count] != right_buffer[..right_count] {
+            return Ok(false);
+        }
+        if left_count == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 pub fn launch(win64_path: &Path, api_key: &str, api_url: &str) -> Result<Child, CommandError> {
@@ -292,7 +317,13 @@ fn retry(code: &str, message: &str) -> CommandError {
 
 #[cfg(test)]
 mod tests {
-    use super::client_metagame_address;
+    use std::{
+        fs,
+        os::windows::fs::OpenOptionsExt,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{client_metagame_address, copy_if_different};
 
     #[test]
     fn converts_api_url_to_client_metagame_address() {
@@ -310,5 +341,35 @@ mod tests {
     fn rejects_client_api_urls_the_dll_cannot_map() {
         assert!(client_metagame_address("https://api.example.test").is_err());
         assert!(client_metagame_address("http://api.example.test/base").is_err());
+    }
+
+    #[test]
+    fn skips_an_identical_destination_that_is_locked_against_writes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "undaunted-launcher-identical-copy-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.dll");
+        let destination = directory.join("destination.dll");
+        fs::write(&source, b"matching patch artifact").unwrap();
+        fs::write(&destination, b"matching patch artifact").unwrap();
+
+        // FILE_SHARE_READ permits the comparison but rejects an overwrite,
+        // matching a loaded DLL that another Dauntless process is using.
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0001)
+            .open(&destination)
+            .unwrap();
+
+        copy_if_different(&source, &destination, "copy failed").unwrap();
+
+        drop(locked);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

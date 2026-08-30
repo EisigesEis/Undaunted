@@ -1,4 +1,9 @@
-use std::{fs, path::{Path, PathBuf}, process::Child, sync::Mutex};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Child,
+    sync::Mutex,
+};
 
 use tauri::{AppHandle, Manager, path::BaseDirectory};
 
@@ -78,27 +83,54 @@ impl AppState {
 
     pub fn set_background(&self, source: PathBuf) -> Result<BackgroundAsset, CommandError> {
         if !source.is_file() {
-            return Err(CommandError::new("invalid_background", "Select an existing image or video file.", false));
+            return Err(CommandError::new(
+                "invalid_background",
+                "Select an existing image or video file.",
+                false,
+            ));
         }
         let extension = source
             .extension()
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase)
-            .ok_or_else(|| CommandError::new("invalid_background", "Choose a PNG, JPEG, WebP, GIF, MP4, WebM, or OGV file.", false))?;
-        let media_type = background_media_type_from_extension(&extension)
-            .ok_or_else(|| CommandError::new("invalid_background", "Choose a PNG, JPEG, WebP, GIF, MP4, WebM, or OGV file.", false))?;
-        fs::create_dir_all(&self.background_dir)
-            .map_err(|_| CommandError::internal("The launcher background folder could not be created."))?;
+            .ok_or_else(|| {
+                CommandError::new(
+                    "invalid_background",
+                    "Choose a PNG, JPEG, WebP, GIF, MP4, WebM, or OGV file.",
+                    false,
+                )
+            })?;
+        let media_type = background_media_type_from_extension(&extension).ok_or_else(|| {
+            CommandError::new(
+                "invalid_background",
+                "Choose a PNG, JPEG, WebP, GIF, MP4, WebM, or OGV file.",
+                false,
+            )
+        })?;
+        fs::create_dir_all(&self.background_dir).map_err(|_| {
+            CommandError::internal("The launcher background folder could not be created.")
+        })?;
         let file_name = format!("background.{extension}");
         let destination = self.background_dir.join(&file_name);
-        let temporary = self.background_dir.join(format!("background.{}.tmp", std::process::id()));
+        let temporary = self
+            .background_dir
+            .join(format!("background.{}.tmp", std::process::id()));
         if let Err(_) = fs::copy(&source, &temporary) {
             let _ = fs::remove_file(&temporary);
-            return Err(CommandError::new("background_copy_failed", "The selected background could not be copied.", true));
+            return Err(CommandError::new(
+                "background_copy_failed",
+                "The selected background could not be copied.",
+                true,
+            ));
         }
         if destination.exists() {
-            fs::remove_file(&destination)
-                .map_err(|_| CommandError::new("background_copy_failed", "The previous background could not be replaced.", true))?;
+            fs::remove_file(&destination).map_err(|_| {
+                CommandError::new(
+                    "background_copy_failed",
+                    "The previous background could not be replaced.",
+                    true,
+                )
+            })?;
         }
         if let Some(previous) = self.config.background_file_name()? {
             let previous_path = self.background_dir.join(previous);
@@ -108,7 +140,11 @@ impl AppState {
         }
         fs::rename(&temporary, &destination).map_err(|_| {
             let _ = fs::remove_file(&temporary);
-            CommandError::new("background_copy_failed", "The selected background could not be saved.", true)
+            CommandError::new(
+                "background_copy_failed",
+                "The selected background could not be saved.",
+                true,
+            )
         })?;
         self.config.set_background_file_name(Some(file_name))?;
         Ok(BackgroundAsset {
@@ -129,11 +165,20 @@ impl AppState {
 }
 
 fn background_media_type(path: &Path) -> Result<&'static str, CommandError> {
-    let extension = path.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
     extension
         .as_deref()
         .and_then(background_media_type_from_extension)
-        .ok_or_else(|| CommandError::new("invalid_background", "The saved launcher background has an unsupported format.", false))
+        .ok_or_else(|| {
+            CommandError::new(
+                "invalid_background",
+                "The saved launcher background has an unsupported format.",
+                false,
+            )
+        })
 }
 
 fn background_media_type_from_extension(extension: &str) -> Option<&'static str> {

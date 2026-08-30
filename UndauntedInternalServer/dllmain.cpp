@@ -1444,6 +1444,7 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
     if (WideContainsInsensitive(Section, L"Mcp") && Key != nullptr) {
         const bool IsStompSection = WideContainsInsensitive(Section, L"StompServiceMcp");
         const bool IsXmppSection = WideContainsInsensitive(Section, L"Xmpp");
+        const bool IsAccountSection = WideContainsInsensitive(Section, L"AccountServiceMcp");
 
         if (IsStompSection && (WideContainsInsensitive(Key, L"path") ||
                                WideContainsInsensitive(Key, L"url") ||
@@ -1465,6 +1466,10 @@ bool ConfigCacheInitGetStringHook(void* a1, const wchar_t* Section, const wchar_
                 return true;
             }
             if (IsStompSection) {
+                *Value = FString(Globals::MetagameAddress.c_str());
+                return true;
+            }
+            if (IsAccountSection) {
                 *Value = FString(Globals::MetagameAddress.c_str());
                 return true;
             }
@@ -1551,6 +1556,12 @@ int NetModeHook(void* a1) { //char __fastcall UArchonStaminaComponent_TryConsume
 
 void InitServerHooks() {
     MH_Initialize();
+
+    if (!Globals::MetagameAddress.empty()) {
+        MH_CreateHook((void*)(Globals::BaseAddress + 0x1D09D50), ConfigCacheInitGetStringHook, &OrigConfigCacheIniGetString);
+
+        MH_EnableHook((void*)(Globals::BaseAddress + 0x1D09D50));
+    }
 
     // This hook is build/signature checked and remains pass-through unless the
     // native 30 FPS pacer is demonstrably losing time in its coarse Sleep call.
@@ -1769,6 +1780,8 @@ void Init() {
 
             Globals::EnableLogging = GetNamedBooleanArgument(
                 Args, NumArgs, L"-undauntedConsoleLog=", false);
+            Globals::MetagameAddress = GetNamedArgument(
+                Args, NumArgs, L"-undauntedMetagameAddress=", L"");
             Globals::AssetStrippingMode = AssetOptimization::ParseMode(GetNamedArgument(
                 Args, NumArgs, L"-undauntedAssetStrippingMode=", L"aggressive"));
             Globals::StripInactiveMapPackages = GetNamedBooleanArgument(
