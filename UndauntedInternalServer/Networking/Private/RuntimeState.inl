@@ -72,6 +72,7 @@ namespace Networking {
         constexpr ULONGLONG DefaultConsiderCacheMaxAgeMs = 250;
         constexpr size_t MaximumOwnerChainDepth = 8;
         constexpr size_t MaximumScheduledActorsPerConnection = 4096;
+        constexpr size_t MaximumInitialDeliveryAttemptsPerConnection = 8;
         constexpr size_t MaximumUrgentDamageTargets = 32;
         constexpr ULONGLONG UrgentDamageTargetMaximumAgeMs = 1000;
         constexpr uint8_t AdaptiveNoDataThreshold = 4;
@@ -183,6 +184,28 @@ namespace Networking {
             ActorScheduleState* State = nullptr;
         };
 
+        enum class InitialDeliveryState : uint8_t {
+            NotApplicable,
+            Pending,
+            OpenUnacknowledged,
+            Acknowledged
+        };
+
+        enum class InitialDeliveryMetric : uint8_t {
+            Pending,
+            Attempted,
+            Produced,
+            Acknowledged,
+            Retried,
+            BudgetDeferred
+        };
+
+        struct InitialDeliveryCandidate {
+            ReplicationCandidate* Candidate = nullptr;
+            ActorScheduleState* State = nullptr;
+            ULONGLONG PendingSinceMs = 0;
+        };
+
         enum class ConnectionBootstrapPhase : uint8_t {
             Bootstrapping,
             Active
@@ -238,6 +261,9 @@ namespace Networking {
             ULONGLONG NextRelevancyCheckMs = 0;
             ULONGLONG LastRelevancyCheckMs = 0;
             ENetDormancy LastDormancy = ENetDormancy::DORM_MAX;
+            InitialDeliveryState InitialDelivery = InitialDeliveryState::NotApplicable;
+            ULONGLONG InitialDeliveryPendingSinceMs = 0;
+            uint32_t InitialDeliveryAttempts = 0;
             bool OwnerTrackable = true;
             bool RelevancyKnown = false;
             bool LastRelevant = true;
@@ -260,7 +286,9 @@ namespace Networking {
             NotRelevant,
             NotDue,
             TemporaryRetired,
-            TearOffRetired
+            TearOffRetired,
+            InitialDeliveryPending,
+            InitialDeliveryWaiting
         };
 
         enum class CacheRebuildReason : uint8_t {
@@ -276,6 +304,7 @@ namespace Networking {
             LivePolicyDecision Decision = LivePolicyDecision::InvalidIdentity;
             ActorScheduleState* State = nullptr;
             bool Moved = false;
+            bool IsInitialDelivery = false;
         };
 
         struct UrgentDamageTarget {
@@ -305,6 +334,7 @@ namespace Networking {
     static std::vector<ReplicationCandidate> ConsiderCache{};
     static std::unordered_map<AActor*, ReplicationCandidate*> CandidateActorLookup{};
     static std::vector<PrioritizedCandidate> PriorityScratch{};
+    static std::vector<InitialDeliveryCandidate> InitialDeliveryScratch{};
     static std::vector<int> CachedLevelActorCounts{};
     static UWorld* CachedWorld = nullptr;
     static ObjectIdentity CachedWorldIdentity{};

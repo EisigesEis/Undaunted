@@ -708,6 +708,15 @@ namespace ServerPerformance {
                 << NetworkingCounters.PreReplicationInvalidatedActors
                 << ",\"actorChannelsCreated\":" << NetworkingCounters.ActorChannelsCreated
                 << ",\"actorChannelsReused\":" << NetworkingCounters.ActorChannelsReused
+                << ",\"initialDelivery\":{\"pending\":"
+                << NetworkingCounters.InitialDeliveryPending
+                << ",\"attempted\":" << NetworkingCounters.InitialDeliveryAttempts
+                << ",\"produced\":" << NetworkingCounters.InitialDeliveryProduced
+                << ",\"acknowledged\":"
+                << NetworkingCounters.InitialDeliveryAcknowledged
+                << ",\"retried\":" << NetworkingCounters.InitialDeliveryRetries
+                << ",\"budgetDeferred\":"
+                << NetworkingCounters.InitialDeliveryBudgetDeferred << "}"
                 << ",\"buckets\":{";
             for (size_t Index = 0; Index < ReplicationBucketNames.size(); ++Index) {
                 if (Index) Output << ',';
@@ -770,7 +779,13 @@ namespace ServerPerformance {
                 if (ClassCounters.Attempts == 0 &&
                     ClassCounters.UntrackableOwnerCalls == 0 &&
                     ClassCounters.OwnerSensitiveDeferrals == 0 &&
-                    ClassCounters.IrrelevantSkips == 0) continue;
+                    ClassCounters.IrrelevantSkips == 0 &&
+                    ClassCounters.InitialDeliveryPending == 0 &&
+                    ClassCounters.InitialDeliveryAttempts == 0 &&
+                    ClassCounters.InitialDeliveryProduced == 0 &&
+                    ClassCounters.InitialDeliveryAcknowledged == 0 &&
+                    ClassCounters.InitialDeliveryRetries == 0 &&
+                    ClassCounters.InitialDeliveryBudgetDeferred == 0) continue;
                 if (WroteImmediateClass) Output << ',';
                 WroteImmediateClass = true;
                 Output << "{\"class\":\"" << JsonEscape(ClassCounters.ClassName.data())
@@ -784,6 +799,15 @@ namespace ServerPerformance {
                     << ",\"untrackableOwnerCalls\":" << ClassCounters.UntrackableOwnerCalls
                     << ",\"ownerSensitiveDeferrals\":" << ClassCounters.OwnerSensitiveDeferrals
                     << ",\"irrelevantSkips\":" << ClassCounters.IrrelevantSkips
+                    << ",\"initialDelivery\":{\"pending\":"
+                    << ClassCounters.InitialDeliveryPending
+                    << ",\"attempted\":" << ClassCounters.InitialDeliveryAttempts
+                    << ",\"produced\":" << ClassCounters.InitialDeliveryProduced
+                    << ",\"acknowledged\":"
+                    << ClassCounters.InitialDeliveryAcknowledged
+                    << ",\"retried\":" << ClassCounters.InitialDeliveryRetries
+                    << ",\"budgetDeferred\":"
+                    << ClassCounters.InitialDeliveryBudgetDeferred << "}"
                     << ",\"immediateNoDataPassStreaks\":[";
                 for (size_t Band = 0; Band < ClassCounters.NoDataPassStreaks.size(); ++Band) {
                     if (Band) Output << ',';

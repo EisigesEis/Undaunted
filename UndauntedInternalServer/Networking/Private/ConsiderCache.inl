@@ -24,6 +24,8 @@
         CandidateActorLookup.reserve(static_cast<size_t>(TotalActorCount));
         if (PriorityScratch.capacity() < static_cast<size_t>(TotalActorCount))
             PriorityScratch.reserve(TotalActorCount);
+        if (InitialDeliveryScratch.capacity() < static_cast<size_t>(TotalActorCount))
+            InitialDeliveryScratch.reserve(TotalActorCount);
         ActorReplicationStates.reserve(TotalActorCount);
         CachedLevelActorCounts.reserve(World->Levels.Num());
         PruneReplicationState(World);
@@ -407,13 +409,149 @@
         return Frequency;
     }
 
+    static void RecordInitialDeliveryMetric(
+        AActor* Actor,
+        ActorReplicationState* ReplicationState,
+        InitialDeliveryMetric Metric
+    ) {
+        uint16_t Slot = ResolveImmediateMetricSlot(Actor, ReplicationState);
+        if (Slot >= ProfileCounters.ImmediateClasses.size())
+            Slot = ImmediateMetricInvalidSlot;
+        ImmediateClassCounters& ClassCounters =
+            ProfileCounters.ImmediateClasses[Slot];
+
+        switch (Metric) {
+        case InitialDeliveryMetric::Pending:
+            ++ProfileCounters.InitialDeliveryPending;
+            ++ClassCounters.InitialDeliveryPending;
+            break;
+        case InitialDeliveryMetric::Attempted:
+            ++ProfileCounters.InitialDeliveryAttempts;
+            ++ClassCounters.InitialDeliveryAttempts;
+            break;
+        case InitialDeliveryMetric::Produced:
+            ++ProfileCounters.InitialDeliveryProduced;
+            ++ClassCounters.InitialDeliveryProduced;
+            break;
+        case InitialDeliveryMetric::Acknowledged:
+            ++ProfileCounters.InitialDeliveryAcknowledged;
+            ++ClassCounters.InitialDeliveryAcknowledged;
+            break;
+        case InitialDeliveryMetric::Retried:
+            ++ProfileCounters.InitialDeliveryRetries;
+            ++ClassCounters.InitialDeliveryRetries;
+            break;
+        case InitialDeliveryMetric::BudgetDeferred:
+            ++ProfileCounters.InitialDeliveryBudgetDeferred;
+            ++ClassCounters.InitialDeliveryBudgetDeferred;
+            break;
+        }
+    }
+
+    static bool IsDormantForReplication(const AActor* Actor) {
+        return Actor &&
+            Actor->NetDormancy != ENetDormancy::DORM_Awake &&
+            Actor->NetDormancy != ENetDormancy::DORM_Never;
+    }
+
+    static bool RequiresExplicitInitialDelivery(const AActor* Actor) {
+        return Actor && (!Actor->bNetStartup || !Actor->bNetLoadOnClient);
+    }
+
+    static void RefreshInitialDeliveryState(
+        AActor* Actor,
+        ActorReplicationState* ReplicationState,
+        UActorChannel* ExistingChannel,
+        ActorScheduleState* State
+    ) {
+        if (!Actor || !ReplicationState || !State)
+            return;
+
+        if (State->InitialDelivery == InitialDeliveryState::NotApplicable) {
+            if (!IsDormantForReplication(Actor) ||
+                !RequiresExplicitInitialDelivery(Actor)) {
+                return;
+            }
+            State->InitialDelivery = InitialDeliveryState::Pending;
+            State->InitialDeliveryPendingSinceMs = State->LastConsideredAtMs;
+            RecordInitialDeliveryMetric(
+                Actor, ReplicationState, InitialDeliveryMetric::Pending);
+        }
+
+        if (ExistingChannel) {
+            if (IsChannelOpenAcknowledged(ExistingChannel)) {
+                if (State->InitialDelivery != InitialDeliveryState::Acknowledged) {
+                    State->InitialDelivery = InitialDeliveryState::Acknowledged;
+                    RecordInitialDeliveryMetric(
+                        Actor, ReplicationState,
+                        InitialDeliveryMetric::Acknowledged);
+                }
+            }
+            else if (State->InitialDelivery != InitialDeliveryState::Acknowledged) {
+                State->InitialDelivery =
+                    InitialDeliveryState::OpenUnacknowledged;
+            }
+        }
+        else if (State->InitialDelivery ==
+            InitialDeliveryState::OpenUnacknowledged) {
+            // The open bunch was not acknowledged before its channel vanished.
+            // Put the same actor back into the oldest-first queue. The retry is
+            // counted when an actual replication attempt is made.
+            State->InitialDelivery = InitialDeliveryState::Pending;
+        }
+    }
+
+    static void FinishInitialDelivery(
+        AActor* Actor,
+        ActorReplicationState* ReplicationState,
+        UActorChannel* Channel,
+        ActorScheduleState* State,
+        bool Attempted,
+        bool ProducedData
+    ) {
+        if (!Actor || !ReplicationState || !State || !Attempted)
+            return;
+
+        if (State->InitialDeliveryAttempts != 0) {
+            RecordInitialDeliveryMetric(
+                Actor, ReplicationState, InitialDeliveryMetric::Retried);
+        }
+        if (State->InitialDeliveryAttempts <
+            (std::numeric_limits<uint32_t>::max)()) {
+            ++State->InitialDeliveryAttempts;
+        }
+        RecordInitialDeliveryMetric(
+            Actor, ReplicationState, InitialDeliveryMetric::Attempted);
+        if (ProducedData) {
+            RecordInitialDeliveryMetric(
+                Actor, ReplicationState, InitialDeliveryMetric::Produced);
+        }
+
+        if (!Channel) {
+            State->InitialDelivery = InitialDeliveryState::Pending;
+            return;
+        }
+        if (IsChannelOpenAcknowledged(Channel)) {
+            if (State->InitialDelivery != InitialDeliveryState::Acknowledged) {
+                State->InitialDelivery = InitialDeliveryState::Acknowledged;
+                RecordInitialDeliveryMetric(
+                    Actor, ReplicationState,
+                    InitialDeliveryMetric::Acknowledged);
+            }
+        }
+        else {
+            State->InitialDelivery = InitialDeliveryState::OpenUnacknowledged;
+        }
+    }
+
     static LivePolicyResult EvaluateLivePolicy(
         UWorld* World,
         UNetConnection* Connection,
         AActor* Actor,
         ActorReplicationState* ReplicationState,
         UActorChannel* ExistingChannel,
-        bool BypassFrequency
+        bool BypassFrequency,
+        bool AllowInitialDelivery
     ) {
         LivePolicyResult Result{};
         ActorScheduleState* State = ResolveSchedulingState(
@@ -442,8 +580,30 @@
             Result.Decision = LivePolicyDecision::TearOffRetired;
             return Result;
         }
-        if (!ExistingChannel && Actor->NetDormancy != ENetDormancy::DORM_Awake &&
-            Actor->NetDormancy != ENetDormancy::DORM_Never) {
+
+        RefreshInitialDeliveryState(
+            Actor, ReplicationState, ExistingChannel, State);
+        const bool Dormant = IsDormantForReplication(Actor);
+        if (Dormant &&
+            State->InitialDelivery == InitialDeliveryState::Acknowledged) {
+            ++ProfileCounters.LivePolicyDormantDeferrals;
+            Result.Decision = LivePolicyDecision::Dormant;
+            return Result;
+        }
+        if (Dormant && RequiresExplicitInitialDelivery(Actor) &&
+            State->InitialDelivery != InitialDeliveryState::NotApplicable) {
+            if (State->InitialDelivery ==
+                InitialDeliveryState::OpenUnacknowledged) {
+                Result.Decision = LivePolicyDecision::InitialDeliveryWaiting;
+                return Result;
+            }
+            if (!AllowInitialDelivery) {
+                Result.Decision = LivePolicyDecision::InitialDeliveryPending;
+                return Result;
+            }
+            Result.IsInitialDelivery = true;
+        }
+        else if (!ExistingChannel && Dormant) {
             ++ProfileCounters.LivePolicyDormantDeferrals;
             Result.Decision = LivePolicyDecision::Dormant;
             return Result;
@@ -487,18 +647,18 @@
             Result.Decision = LivePolicyDecision::NotRelevant;
             return Result;
         }
-        if (!BypassFrequency && ExistingChannel &&
+        if (!BypassFrequency && !Result.IsInitialDelivery && ExistingChannel &&
             State->NextFrequencyDeadlineMs != 0 &&
             NowMs < State->NextFrequencyDeadlineMs) {
             ++ProfileCounters.LivePolicyNotDue;
             Result.Decision = LivePolicyDecision::NotDue;
             return Result;
         }
-        if (!BypassFrequency && ExistingChannel)
+        if (!BypassFrequency && !Result.IsInitialDelivery && ExistingChannel)
             ++ProfileCounters.LivePolicyDue;
 
         const bool MustCheckRelevancy =
-            BypassFrequency || !ExistingChannel || OwnerSensitive ||
+            BypassFrequency || Result.IsInitialDelivery || !ExistingChannel || OwnerSensitive ||
             Actor->bReplicateMovement || !State->RelevancyKnown ||
             NowMs >= State->NextRelevancyCheckMs;
         if (MustCheckRelevancy) {

@@ -24,7 +24,7 @@ namespace Networking {
 	constexpr size_t NetRoleMatrixCount = NetRoleCount * NetRoleCount;
 	constexpr size_t PriorityBandCount = 5;
 	constexpr size_t CacheRebuildReasonCount = 6;
-	constexpr uint32_t ProfileSchemaVersion = 2;
+	constexpr uint32_t ProfileSchemaVersion = 3;
 
 	enum class UrgentReplicationReason : uint8_t {
 		Stagger,
@@ -69,6 +69,12 @@ namespace Networking {
 		uint64_t UntrackableOwnerCalls = 0;
 		uint64_t OwnerSensitiveDeferrals = 0;
 		uint64_t IrrelevantSkips = 0;
+		uint64_t InitialDeliveryPending = 0;
+		uint64_t InitialDeliveryAttempts = 0;
+		uint64_t InitialDeliveryProduced = 0;
+		uint64_t InitialDeliveryAcknowledged = 0;
+		uint64_t InitialDeliveryRetries = 0;
+		uint64_t InitialDeliveryBudgetDeferred = 0;
 	};
 
 	struct ProfilingCounters {
@@ -214,6 +220,12 @@ namespace Networking {
 		uint64_t LivePolicyMovementPrepassSuccesses = 0;
 		uint64_t LivePolicyCriticalRejected = 0;
 		uint64_t LivePolicyDuplicateSkips = 0;
+		uint64_t InitialDeliveryPending = 0;
+		uint64_t InitialDeliveryAttempts = 0;
+		uint64_t InitialDeliveryProduced = 0;
+		uint64_t InitialDeliveryAcknowledged = 0;
+		uint64_t InitialDeliveryRetries = 0;
+		uint64_t InitialDeliveryBudgetDeferred = 0;
 		uint64_t SchedulerStateInsertions = 0;
 		uint64_t SchedulerStateCapacityDrops = 0;
 		uint64_t SchedulerActorIdentityResets = 0;

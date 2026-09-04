@@ -377,6 +377,8 @@
                 RefreshPawnState(Connection, *Bootstrap, NetworkTick, NowMs);
             const bool IsBootstrapping = Bootstrap &&
                 Bootstrap->Phase == ConnectionBootstrapPhase::Bootstrapping;
+            const bool InitialDeliveryReady = Bootstrap &&
+                Bootstrap->PossessionAcknowledged;
 			if (++CurrentConnectionPass == 0)
 				++CurrentConnectionPass;
 			const uint64_t ConnectionPass = CurrentConnectionPass;
@@ -417,8 +419,11 @@
 
                     const LivePolicyResult Policy = EvaluateLivePolicy(
                         World, Connection, Actor, Candidate.ReplicationState,
-                        ExistingChannel, BypassFrequency);
-                    Candidate.LastReplicatedConnectionPass = ConnectionPass;
+                        ExistingChannel, BypassFrequency, false);
+                    if (Policy.Decision !=
+                        LivePolicyDecision::InitialDeliveryPending) {
+                        Candidate.LastReplicatedConnectionPass = ConnectionPass;
+                    }
                     if (Policy.Decision != LivePolicyDecision::Eligible) {
                         if (BypassFrequency)
                             ++ProfileCounters.LivePolicyCriticalRejected;
@@ -554,6 +559,7 @@
                 }
 
                 PriorityScratch.clear();
+                InitialDeliveryScratch.clear();
                 if (PriorityScratch.capacity() < ConsiderCache.size())
                     PriorityScratch.reserve(ConsiderCache.size());
                 for (ReplicationCandidate& Candidate : ConsiderCache) {
@@ -573,10 +579,18 @@
                         ExistingChannel = ExistingIt->second;
                     const LivePolicyResult Policy = EvaluateLivePolicy(
                         World, Connection, Actor, Candidate.ReplicationState,
-                        ExistingChannel, false);
+                        ExistingChannel, false, InitialDeliveryReady);
                     Candidate.LastReplicatedConnectionPass = ConnectionPass;
                     if (Policy.Decision != LivePolicyDecision::Eligible)
                         continue;
+                    if (Policy.IsInitialDelivery && Policy.State) {
+                        InitialDeliveryScratch.push_back({
+                            &Candidate,
+                            Policy.State,
+                            Policy.State->InitialDeliveryPendingSinceMs
+                        });
+                        continue;
+                    }
                     const float Priority = ComputeLivePriority(
                         Connection, Actor, Policy.State, ExistingChannel);
                     ++ProfileCounters.LivePolicyPriorityBands[
@@ -598,6 +612,60 @@
                             ? Right.Candidate->ReplicationState->Identity.Index : -1;
                         return LeftIndex < RightIndex;
                     });
+
+                const size_t InitialDeliveryAttemptCount = (std::min)(
+                    MaximumInitialDeliveryAttemptsPerConnection,
+                    InitialDeliveryScratch.size());
+                std::partial_sort(InitialDeliveryScratch.begin(),
+                    InitialDeliveryScratch.begin() + InitialDeliveryAttemptCount,
+                    InitialDeliveryScratch.end(),
+                    [](const InitialDeliveryCandidate& Left,
+                        const InitialDeliveryCandidate& Right) {
+                        if (Left.PendingSinceMs != Right.PendingSinceMs)
+                            return Left.PendingSinceMs < Right.PendingSinceMs;
+                        const int32_t LeftIndex =
+                            Left.Candidate && Left.Candidate->ReplicationState
+                            ? Left.Candidate->ReplicationState->Identity.Index : -1;
+                        const int32_t RightIndex =
+                            Right.Candidate && Right.Candidate->ReplicationState
+                            ? Right.Candidate->ReplicationState->Identity.Index : -1;
+                        return LeftIndex < RightIndex;
+                    });
+                for (size_t InitialIndex = 0;
+                    InitialIndex < InitialDeliveryScratch.size();
+                    ++InitialIndex) {
+                    InitialDeliveryCandidate& Pending =
+                        InitialDeliveryScratch[InitialIndex];
+                    if (!Pending.Candidate || !Pending.State)
+                        continue;
+
+                    ReplicationCandidate& Candidate = *Pending.Candidate;
+                    if (InitialIndex >= InitialDeliveryAttemptCount) {
+                        RecordInitialDeliveryMetric(
+                            Candidate.Actor, Candidate.ReplicationState,
+                            InitialDeliveryMetric::BudgetDeferred);
+                        continue;
+                    }
+
+                    bool ReplicationAttempted = false;
+                    const bool ProducedData = ReplicateActorForConnection(
+                        Connection, Candidate.Actor, Candidate.IsPlayerController,
+                        ChannelName, CreateChannelByName, SetChannelActor,
+                        ReplicateActor, UpdateCamera, Candidate.Bucket, false,
+                        Candidate.ReplicationState, &ReplicationAttempted);
+                    UActorChannel* ResultingChannel = nullptr;
+                    const auto ResultingIt =
+                        ScratchActorChannels.find(Candidate.Actor);
+                    if (ResultingIt != ScratchActorChannels.end())
+                        ResultingChannel = ResultingIt->second;
+                    FinishInitialDelivery(
+                        Candidate.Actor, Candidate.ReplicationState,
+                        ResultingChannel, Pending.State,
+                        ReplicationAttempted, ProducedData);
+                    FinishLivePolicy(
+                        Candidate.Actor, ResultingChannel, Pending.State,
+                        ReplicationAttempted, ProducedData);
+                }
                 ++ProfileCounters.LivePolicyPrioritySorts;
                 ProfileCounters.LivePolicyPriorityCandidates += PriorityScratch.size();
                 for (const PrioritizedCandidate& Prioritized : PriorityScratch) {

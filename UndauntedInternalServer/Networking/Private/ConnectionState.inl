@@ -2,6 +2,7 @@
         ConsiderCache.clear();
         CandidateActorLookup.clear();
         PriorityScratch.clear();
+        InitialDeliveryScratch.clear();
         CachedLevelActorCounts.clear();
         ActorReplicationStates.clear();
         ConnectionBootstrapStates.clear();
