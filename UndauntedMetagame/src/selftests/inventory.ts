@@ -106,6 +106,75 @@ export async function runSelftest(){
     }]);
     assert.deepStrictEqual(StaleUpdate, {success: false, error: "conflict"});
 
+    const WeaponSeed = await RunInventoryTransaction("inventory-user", "inventory-character", "weapon-seed", [{
+        catalogId: "WP_LEVEL_RESET",
+        instanceId: "weapon-level-reset",
+        itemData: "{\"CurrentLevel\":0}",
+        updateVersion: 9
+    }], [], [], [], []);
+    assert.strictEqual(WeaponSeed.success, true);
+    const WeaponUpgrade = await RunInventoryTransaction("inventory-user", "inventory-character", "weapon-upgrade", [], [], [], [], [{
+        catalogId: "WP_LEVEL_RESET",
+        instanceId: "weapon-level-reset",
+        itemData: "{\"CurrentLevel\":1}",
+        updateVersion: 1
+    }]);
+    assert.deepStrictEqual(WeaponUpgrade.success && WeaponUpgrade.data?.updatedInstancedItems, [{
+        catalogId: "WP_LEVEL_RESET", instanceId: "weapon-level-reset", itemData: "{\"CurrentLevel\":1}", updateVersion: 1
+    }]);
+    const WeaponNext = await UpdateInstancedItem("inventory-character", "inventory-user", "weapon-level-reset", "WP_LEVEL_RESET", "{\"CurrentLevel\":2}", 2);
+    assert.strictEqual(WeaponNext.success, true);
+    assert.strictEqual(WeaponNext.success && WeaponNext.data.updateVersion, 2);
+
+    const PartSeed = await RunInventoryTransaction("inventory-user", "inventory-character", "part-seed", [{
+        catalogId: "PART_DP_LEVEL_RESET",
+        instanceId: "repeater-part-level-reset",
+        itemData: "{\"CurrentLevel\":0}",
+        updateVersion: 7
+    }], [], [], [], []);
+    assert.strictEqual(PartSeed.success, true);
+    const PartUpgrade = await UpdateInstancedItem("inventory-character", "inventory-user", "repeater-part-level-reset", "PART_DP_LEVEL_RESET", "{\"CurrentLevel\":1}", 1);
+    assert.strictEqual(PartUpgrade.success, true);
+    assert.strictEqual(PartUpgrade.success && PartUpgrade.data.updateVersion, 1);
+
+    const EqualWeapon = await RunInventoryTransaction("inventory-user", "inventory-character", "equal-weapon", [], [], [], [], [{
+        catalogId: "WP_LEVEL_RESET",
+        instanceId: "weapon-level-reset",
+        itemData: "{\"CurrentLevel\":2,\"TransmogCatalogID\":\"WP_OTHER\"}",
+        updateVersion: 1
+    }]);
+    assert.deepStrictEqual(EqualWeapon, {success: false, error: "conflict"});
+
+    const OtherSeed = await RunInventoryTransaction("inventory-user", "inventory-character", "other-seed", [{
+        catalogId: "ARMOR_LEVEL_RESET",
+        instanceId: "armor-level-reset",
+        itemData: "{\"CurrentLevel\":0}",
+        updateVersion: 7
+    }], [], [], [], []);
+    assert.strictEqual(OtherSeed.success, true);
+    const OtherUpgrade = await RunInventoryTransaction("inventory-user", "inventory-character", "other-upgrade", [], [], [], [], [{
+        catalogId: "ARMOR_LEVEL_RESET",
+        instanceId: "armor-level-reset",
+        itemData: "{\"CurrentLevel\":1}",
+        updateVersion: 1
+    }]);
+    assert.deepStrictEqual(OtherUpgrade, {success: false, error: "conflict"});
+
+    const BadWeaponSeed = await RunInventoryTransaction("inventory-user", "inventory-character", "bad-weapon-seed", [{
+        catalogId: "WP_MALFORMED_LEVEL_RESET",
+        instanceId: "malformed-weapon-level-reset",
+        itemData: "not-json",
+        updateVersion: 7
+    }], [], [], [], []);
+    assert.strictEqual(BadWeaponSeed.success, true);
+    const BadWeaponUpgrade = await RunInventoryTransaction("inventory-user", "inventory-character", "bad-weapon-upgrade", [], [], [], [], [{
+        catalogId: "WP_MALFORMED_LEVEL_RESET",
+        instanceId: "malformed-weapon-level-reset",
+        itemData: "{\"CurrentLevel\":1}",
+        updateVersion: 1
+    }]);
+    assert.deepStrictEqual(BadWeaponUpgrade, {success: false, error: "conflict"});
+
     const StatelessRetry = await RunInventoryTransaction("inventory-user", "inventory-character", "stateless-retry-test", [], [], [], [], [{
         accountId: "spoofed-user",
         catalogId: "QI_BASIC_FLARE_DURABLE",

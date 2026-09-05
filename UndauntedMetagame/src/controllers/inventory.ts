@@ -135,6 +135,32 @@ function IsSameInstancedItem(CurrentItem: any, IncomingItem: any){
         && (CurrentItem.itemData ?? null) === (IncomingItem.itemData ?? null);
 }
 
+function GetLevel(Item: any){
+    if(typeof Item?.itemData !== "string") return undefined;
+    try {
+        const Level = JSON.parse(Item.itemData)?.CurrentLevel;
+        return Number.isSafeInteger(Level) && Level >= 0 ? Level : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+
+function IsWeapon(Item: any){
+    return typeof Item?.catalogId === "string" && (Item.catalogId.startsWith("WP_") || Item.catalogId.startsWith("PART_DP_"));
+}
+
+function IsUpgrade(CurrentItem: any, IncomingItem: any){
+    const CurrentLevel = GetLevel(CurrentItem);
+    const IncomingLevel = GetLevel(IncomingItem);
+    return CurrentItem.catalogId === IncomingItem.catalogId
+        && CurrentItem.instanceId === IncomingItem.instanceId
+        && IsWeapon(CurrentItem)
+        && CurrentLevel != undefined
+        && IncomingLevel != undefined
+        && IncomingLevel > CurrentLevel;
+}
+
 function AssertValidIncomingInstancedItem(IncomingItem: any, Operation: string){
     if(HasStatelessItemData(IncomingItem) && IncomingItem.updateVersion !== 0){
         throw new InventoryValidationError(`Refusing stateless instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: expected updateVersion 0, got ${IncomingItem.updateVersion}`);
@@ -158,8 +184,12 @@ function AssertExistingInstancedItemWrite(CurrentItem: any, IncomingItem: any, O
         return "skip";
     }
 
-    const IsStaleInstancedItem = typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion;
-    if(IsStaleInstancedItem){
+    const IsStale = typeof IncomingItem.updateVersion !== "number" || IncomingItem.updateVersion <= CurrentItem.updateVersion;
+    if(IsStale){
+        if(Operation !== "remove" && IsUpgrade(CurrentItem, IncomingItem)){
+            logger.info(`Allowing restarted updateVersion for ${IncomingItem.catalogId}/${IncomingItem.instanceId} ${Operation}`);
+            return "write";
+        }
         throw new InventoryConflictError(`Refusing stale instanced item ${Operation} ${IncomingItem.catalogId}/${IncomingItem.instanceId}: current updateVersion ${CurrentItem.updateVersion}, incoming updateVersion ${IncomingItem.updateVersion}`);
     }
 
